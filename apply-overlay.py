@@ -200,6 +200,253 @@ if old_tabs not in cg:
 cg = cg.replace(old_tabs, new_tabs, 1)
 
 offline_code = r'''
+
+private fun splitNonBlankLines(value: String): List<String> =
+    value.lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+@Composable
+private fun OfflineRefreshMode(
+    keepMobile: KeepMobile,
+    onBack: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var sharesText by remember { mutableStateOf("") }
+    val oldPassphrase = remember { SecurePassphrase() }
+    val newPassphrase = remember { SecurePassphrase() }
+    val confirmPassphrase = remember { SecurePassphrase() }
+    var oldPassphraseDisplay by remember { mutableStateOf("") }
+    var newPassphraseDisplay by remember { mutableStateOf("") }
+    var confirmPassphraseDisplay by remember { mutableStateOf("") }
+    var rotating by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<FrostGenerationResult?>(null) }
+    var selectedShare by remember { mutableIntStateOf(0) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            oldPassphrase.clear()
+            newPassphrase.clear()
+            confirmPassphrase.clear()
+            sharesText = ""
+            result = null
+        }
+    }
+
+    val refreshed = result
+    if (refreshed != null) {
+        val share = refreshed.shares[selectedShare]
+        val frames by produceState<List<String>?>(initialValue = null, key1 = share.exportData) {
+            value = withContext(Dispatchers.Default) {
+                runCatching {
+                    io.privkey.keep.uniffi.generateAnimatedFrames(share.exportData, 600u)
+                }.getOrElse { listOf(share.exportData) }
+            }
+        }
+
+        StatusCard(
+            text = "FROST share rotation complete. The account npub is unchanged. Replace every old share with the matching new share; old and new shares must not be mixed.",
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        NpubDisplay(hexToNpub(refreshed.groupPubkey) ?: refreshed.groupPubkey)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            "New share " + (selectedShare + 1) + " of " + refreshed.shares.size,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        val readyFrames = frames
+        if (readyFrames == null) {
+            CircularProgressIndicator()
+        } else if (readyFrames.size > 1) {
+            AnimatedQrCodeDisplay(
+                frames = readyFrames,
+                label = "Rotated FROST share " + share.shareIndex,
+                fullData = share.exportData
+            )
+        } else {
+            QrCodeDisplay(
+                data = share.exportData,
+                label = "Rotated FROST share " + share.shareIndex
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = { if (selectedShare > 0) selectedShare-- },
+                enabled = selectedShare > 0,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Previous")
+            }
+            Button(
+                onClick = { if (selectedShare < refreshed.shares.lastIndex) selectedShare++ },
+                enabled = selectedShare < refreshed.shares.lastIndex,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Next")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Done")
+        }
+        return
+    }
+
+    StatusCard(
+        text = "Offline share refresh keeps the same npub but replaces every FROST share. You must provide the COMPLETE current share set. Do this only on a trusted offline device.",
+        containerColor = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer
+    )
+    Spacer(modifier = Modifier.height(16.dp))
+
+    OutlinedTextField(
+        value = sharesText,
+        onValueChange = {
+            sharesText = it
+            error = null
+        },
+        label = { Text("Current encrypted shares (one kshare1... per line)") },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
+        minLines = 5
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    OutlinedTextField(
+        value = oldPassphraseDisplay,
+        onValueChange = {
+            oldPassphrase.update(it)
+            oldPassphraseDisplay = it
+            error = null
+        },
+        label = { Text("Current share passphrase") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    OutlinedTextField(
+        value = newPassphraseDisplay,
+        onValueChange = {
+            newPassphrase.update(it)
+            newPassphraseDisplay = it
+            error = null
+        },
+        label = { Text("New share passphrase") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    OutlinedTextField(
+        value = confirmPassphraseDisplay,
+        onValueChange = {
+            confirmPassphrase.update(it)
+            confirmPassphraseDisplay = it
+            error = null
+        },
+        label = { Text("Confirm new passphrase") },
+        visualTransformation = PasswordVisualTransformation(),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+
+    error?.let {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            it,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
+
+    Button(
+        onClick = {
+            val shares = splitNonBlankLines(sharesText)
+            when {
+                shares.size < 2 -> error = "Provide the complete FROST share set"
+                oldPassphrase.length == 0 -> error = "Current passphrase is required"
+                newPassphrase.length < 15 -> error = "Use a new passphrase of at least 15 characters"
+                !newPassphrase.contentEquals(confirmPassphrase) -> error = "New passphrases do not match"
+                else -> {
+                    val oldChars = oldPassphrase.toCharArray()
+                    val newChars = newPassphrase.toCharArray()
+                    rotating = true
+                    scope.launch {
+                        try {
+                            val refreshedResult = withContext(Dispatchers.Default) {
+                                keepMobile.frostRefreshExports(
+                                    shares,
+                                    List(shares.size) { String(oldChars) },
+                                    "Refreshed FROST",
+                                    String(newChars)
+                                )
+                            }
+                            result = refreshedResult
+                            selectedShare = 0
+                            sharesText = ""
+                            oldPassphrase.clear()
+                            newPassphrase.clear()
+                            confirmPassphrase.clear()
+                            oldPassphraseDisplay = ""
+                            newPassphraseDisplay = ""
+                            confirmPassphraseDisplay = ""
+                        } catch (e: Exception) {
+                            if (BuildConfig.DEBUG) {
+                                Log.e("OfflineFrost", "Share refresh failed", e)
+                            }
+                            error = "FROST share rotation failed. Verify that every current share and passphrase is correct."
+                        } finally {
+                            Arrays.fill(oldChars, '\u0000')
+                            Arrays.fill(newChars, '\u0000')
+                            rotating = false
+                        }
+                    }
+                }
+            }
+        },
+        enabled = !rotating,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        if (rotating) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text("Rotate / refresh FROST shares")
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = onBack,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Back")
+    }
+}
+
+
 private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
 
 @Composable
@@ -217,6 +464,12 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
     var generationResult by remember { mutableStateOf<FrostGenerationResult?>(null) }
     var selectedShare by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var refreshMode by remember { mutableStateOf(false) }
+
+    if (refreshMode) {
+        OfflineRefreshMode(keepMobile = keepMobile, onBack = { refreshMode = false })
+        return
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -322,6 +575,14 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
         }
         return
     }
+
+    OutlinedButton(
+        onClick = { refreshMode = true },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Rotate / refresh existing FROST shares")
+    }
+    Spacer(modifier = Modifier.height(16.dp))
 
     StatusCard(
         text = stringResource(R.string.igloo_offline_warning),
