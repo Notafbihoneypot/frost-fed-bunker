@@ -755,6 +755,113 @@ marker = "private enum class CoordPhase { Form, Collect, Ready }\n"
 if marker not in cg:
     raise SystemExit("CoordPhase marker not found")
 cg = cg.replace(marker, offline_code + marker, 1)
+
+# FROSTFED_THRESHOLD_PRESETS
+# Make the common layouts obvious instead of hiding them behind +/- steppers.
+preset_anchor = """            Spacer(modifier = Modifier.height(16.dp))
+
+            Stepper(
+                label = stringResource(R.string.create_group_threshold_label, threshold),
+"""
+preset_block = """            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Quick threshold presets",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = threshold == 2 && participants == 3,
+                    onClick = {
+                        threshold = 2
+                        participants = 3
+                    },
+                    label = { Text("2 of 3") },
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = threshold == 3 && participants == 5,
+                    onClick = {
+                        threshold = 3
+                        participants = 5
+                    },
+                    label = { Text("3 of 5") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Text(
+                text = "Pick a preset or use the controls below for a custom group.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Stepper(
+                label = stringResource(R.string.create_group_threshold_label, threshold),
+"""
+if preset_anchor not in cg:
+    raise SystemExit("distributed threshold preset anchor not found")
+cg = cg.replace(preset_anchor, preset_block, 1)
+
+offline_preset_anchor = """    Spacer(modifier = Modifier.height(16.dp))
+
+    Stepper(
+        label = stringResource(R.string.create_group_threshold_label, threshold),
+"""
+offline_preset_block = """    Spacer(modifier = Modifier.height(16.dp))
+
+    Text(
+        text = "Quick threshold presets",
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        FilterChip(
+            selected = threshold == 2 && participants == 3,
+            onClick = {
+                threshold = 2
+                participants = 3
+            },
+            label = { Text("2 of 3") },
+            modifier = Modifier.weight(1f)
+        )
+        FilterChip(
+            selected = threshold == 3 && participants == 5,
+            onClick = {
+                threshold = 3
+                participants = 5
+            },
+            label = { Text("3 of 5") },
+            modifier = Modifier.weight(1f)
+        )
+    }
+    Text(
+        text = "Offline mode will generate all selected shares on this device so you can distribute them afterward.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    )
+
+    Spacer(modifier = Modifier.height(16.dp))
+
+    Stepper(
+        label = stringResource(R.string.create_group_threshold_label, threshold),
+"""
+if offline_preset_anchor not in cg:
+    raise SystemExit("offline threshold preset anchor not found")
+cg = cg.replace(offline_preset_anchor, offline_preset_block, 1)
+
 create_group.write_text(cg, encoding="utf-8")
 
 main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
