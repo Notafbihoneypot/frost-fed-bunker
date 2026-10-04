@@ -985,4 +985,111 @@ if refresh_anchor not in km:
 km = km.replace(refresh_anchor, refresh_method + refresh_anchor, 1)
 keep_mobile_rs.write_text(km, encoding="utf-8")
 
+
+
+# Amber-style NIP-46 signing approval notifications with inline Approve/Reject
+# actions. Do not force-launch an activity from the background; tapping the
+# notification still opens the detailed approval screen.
+approval_receiver = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "Nip46ApprovalActionReceiver.kt"
+approval_receiver.write_text(r'''package io.privkey.keep.nip46
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+
+class Nip46ApprovalActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
+        when (intent.action) {
+            ACTION_APPROVE -> BunkerService.respondToApproval(requestId, true)
+            ACTION_REJECT -> BunkerService.respondToApproval(requestId, false)
+        }
+    }
+
+    companion object {
+        const val ACTION_APPROVE = "org.glowstr.igloomobile.NIP46_APPROVE"
+        const val ACTION_REJECT = "org.glowstr.igloomobile.NIP46_REJECT"
+        const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
+    }
+}
+''', encoding="utf-8")
+
+# Register the private receiver.
+manifest = root / "app" / "src" / "main" / "AndroidManifest.xml"
+mt = manifest.read_text(encoding="utf-8")
+receiver_xml = """
+        <receiver
+            android:name=".nip46.Nip46ApprovalActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+"""
+if receiver_xml.strip() not in mt:
+    mt = mt.replace(
+        "        <service\n            android:name=\".nip46.BunkerService\"",
+        receiver_xml + "        <service\n            android:name=\".nip46.BunkerService\"",
+        1,
+    )
+manifest.write_text(mt, encoding="utf-8")
+
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+bs = bs.replace(
+    """        runCatching { startActivity(intent) }
+        postApprovalNotification(requestId, request, intent)
+""",
+    """        postApprovalNotification(requestId, request, intent)
+""",
+    1,
+)
+
+notify_anchor = """        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
+        val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
+"""
+notify_replacement = """        val approveIntent = PendingIntent.getBroadcast(
+            this,
+            notificationId * 2 + 1,
+            Intent(this, Nip46ApprovalActionReceiver::class.java)
+                .setAction(Nip46ApprovalActionReceiver.ACTION_APPROVE)
+                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val rejectIntent = PendingIntent.getBroadcast(
+            this,
+            notificationId * 2 + 2,
+            Intent(this, Nip46ApprovalActionReceiver::class.java)
+                .setAction(Nip46ApprovalActionReceiver.ACTION_REJECT)
+                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
+        val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
+"""
+if notify_anchor not in bs:
+    raise SystemExit("NIP-46 approval notification anchor not found")
+bs = bs.replace(notify_anchor, notify_replacement, 1)
+
+action_anchor = """            .setContentIntent(contentIntent)
+            .setFullScreenIntent(contentIntent, true)
+            .setAutoCancel(true)
+"""
+action_replacement = """            .setContentIntent(contentIntent)
+            .setFullScreenIntent(contentIntent, true)
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.cosign_approve),
+                approveIntent
+            )
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.cosign_reject),
+                rejectIntent
+            )
+            .setAutoCancel(true)
+"""
+if action_anchor not in bs:
+    raise SystemExit("NIP-46 notification action anchor not found")
+bs = bs.replace(action_anchor, action_replacement, 1)
+bunker_service.write_text(bs, encoding="utf-8")
+
 print("Igloo Mobile overlay applied successfully")
