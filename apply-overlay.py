@@ -625,4 +625,103 @@ cs = cs.replace(
 )
 connections_strings.write_text(cs, encoding="utf-8")
 
+
+
+# Expose proactive FROST share refresh to Android. This requires the COMPLETE
+# current share set and preserves the group public key/npub while replacing all
+# signing shares. It is intentionally an offline trusted-device operation.
+keep_mobile_rs = root / "keep" / "keep-mobile" / "src" / "lib.rs"
+km = keep_mobile_rs.read_text(encoding="utf-8")
+refresh_anchor = """    /// FFI split, option B (§8): mint (or re-mint) this device's per-group DKG
+"""
+refresh_method = r'''    /// Refresh an existing complete FROST share set offline.
+    ///
+    /// This is proactive share rotation: the group public key stays the same,
+    /// while every signing share changes. The full current share set is required
+    /// so no absent participant is silently orphaned.
+    pub fn frost_refresh_exports(
+        &self,
+        share_data: Vec<String>,
+        passphrases: Vec<String>,
+        name: String,
+        new_passphrase: String,
+    ) -> Result<FrostGenerationResult, KeepMobileError> {
+        Self::validate_share_name(&name)?;
+        if share_data.is_empty() || share_data.len() != passphrases.len() {
+            return Err(KeepMobileError::InvalidShare {
+                msg: "Provide every share and one passphrase per share".into(),
+            });
+        }
+
+        let share_data: Vec<Zeroizing<String>> =
+            share_data.into_iter().map(Zeroizing::new).collect();
+        let passphrases: Vec<Zeroizing<String>> =
+            passphrases.into_iter().map(Zeroizing::new).collect();
+
+        let mut shares = Vec::with_capacity(share_data.len());
+        for (data, passphrase) in share_data.iter().zip(passphrases.iter()) {
+            let export = ShareExport::parse(data.as_str())
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            if export.ciphersuite != keep_core::frost::Ciphersuite::Secp256k1Tr {
+                return Err(KeepMobileError::InvalidShare {
+                    msg: "Only secp256k1 (Bitcoin/Nostr) shares are supported".into(),
+                });
+            }
+            let share = export
+                .to_share(passphrase, &name)
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            shares.push(share);
+        }
+
+        let first = shares.first().ok_or_else(|| KeepMobileError::InvalidShare {
+            msg: "No shares supplied".into(),
+        })?;
+        let total = first.metadata.total_shares as usize;
+        if shares.len() != total {
+            return Err(KeepMobileError::InvalidShare {
+                msg: format!(
+                    "Share refresh requires the full set of {total} shares; got {}",
+                    shares.len()
+                ),
+            });
+        }
+
+        let group_pubkey = first.metadata.group_pubkey;
+        let threshold = first.metadata.threshold;
+        let mut identifiers = std::collections::HashSet::new();
+        for share in &shares {
+            if share.metadata.group_pubkey != group_pubkey
+                || share.metadata.threshold != threshold
+                || share.metadata.total_shares as usize != total
+            {
+                return Err(KeepMobileError::InvalidShare {
+                    msg: "Shares do not belong to the same FROST group".into(),
+                });
+            }
+            if !identifiers.insert(share.metadata.identifier) {
+                return Err(KeepMobileError::InvalidShare {
+                    msg: "Duplicate FROST share identifier".into(),
+                });
+            }
+        }
+
+        let (refreshed, _) = keep_core::frost::refresh_shares(&shares)
+            .map_err(|e| KeepMobileError::FrostError { msg: e.to_string() })?;
+
+        if refreshed.iter().any(|s| s.metadata.group_pubkey != group_pubkey) {
+            return Err(KeepMobileError::FrostError {
+                msg: "Group public key changed during refresh; refusing output".into(),
+            });
+        }
+
+        let new_passphrase = Zeroizing::new(new_passphrase);
+        Self::build_generation_result(&refreshed, &new_passphrase)
+    }
+
+'''
+if refresh_anchor not in km:
+    raise SystemExit("KeepMobile FROST DKG anchor not found")
+km = km.replace(refresh_anchor, refresh_method + refresh_anchor, 1)
+keep_mobile_rs.write_text(km, encoding="utf-8")
+
 print("Igloo Mobile overlay applied successfully")
