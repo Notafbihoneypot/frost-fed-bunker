@@ -1000,14 +1000,12 @@ import android.content.Intent
 class Nip46ApprovalActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
-        when (intent.action) {
-            ACTION_APPROVE -> BunkerService.respondToApproval(requestId, true)
-            ACTION_REJECT -> BunkerService.respondToApproval(requestId, false)
+        if (intent.action == ACTION_REJECT) {
+            BunkerService.respondToApproval(requestId, false)
         }
     }
 
     companion object {
-        const val ACTION_APPROVE = "org.glowstr.igloomobile.NIP46_APPROVE"
         const val ACTION_REJECT = "org.glowstr.igloomobile.NIP46_REJECT"
         const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
     }
@@ -1046,14 +1044,9 @@ bs = bs.replace(
 notify_anchor = """        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
         val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
 """
-notify_replacement = """        val approveIntent = PendingIntent.getBroadcast(
-            this,
-            notificationId * 2 + 1,
-            Intent(this, Nip46ApprovalActionReceiver::class.java)
-                .setAction(Nip46ApprovalActionReceiver.ACTION_APPROVE)
-                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+notify_replacement = """        // Approval must still pass through Nip46ApprovalActivity so the
+        // biometric/Keystore gate cannot be bypassed from a notification action.
+        val approveIntent = contentIntent
         val rejectIntent = PendingIntent.getBroadcast(
             this,
             notificationId * 2 + 2,
