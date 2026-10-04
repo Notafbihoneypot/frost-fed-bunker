@@ -47,6 +47,20 @@ jobs:
       - name: Apply Frost Fed Bunker Android overlay
         run: python3 apply-overlay.py upstream-keep-android
 
+      - name: Pin local Rust overlay commit
+        run: |
+          set -euo pipefail
+          if ! git -C upstream-keep-android/keep diff --quiet -- keep-mobile/src/lib.rs; then
+            git -C upstream-keep-android/keep config user.name "Frost Fed Bunker CI"
+            git -C upstream-keep-android/keep config user.email "actions@users.noreply.github.com"
+            git -C upstream-keep-android/keep add keep-mobile/src/lib.rs
+            git -C upstream-keep-android/keep commit -m "frost-fed-bunker: mobile share refresh overlay"
+            PATCHED_KEEP_SHA="$(git -C upstream-keep-android/keep rev-parse HEAD)"
+            printf '%s\n' "$PATCHED_KEEP_SHA" > upstream-keep-android/keep.version
+          fi
+          test -z "$(git -C upstream-keep-android/keep status --porcelain)"
+          test "$(cat upstream-keep-android/keep.version)" = "$(git -C upstream-keep-android/keep rev-parse HEAD)"
+
       - name: Set up JDK 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
         with:
