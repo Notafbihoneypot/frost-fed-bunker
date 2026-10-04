@@ -1265,16 +1265,9 @@ main_activity.write_text(ma, encoding="utf-8")
 # for a Nostr signing request.
 bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
 bs = bunker_service.read_text(encoding="utf-8")
-bs = bs.replace(
-    """            .setContentIntent(contentIntent)
-            .setFullScreenIntent(contentIntent, true)
-            .setAutoCancel(true)
-""",
-    """            .setContentIntent(contentIntent)
-            .setAutoCancel(true)
-""",
-    1,
-)
+# Strip full-screen intent even when the Amber-style action patch inserted
+# Approve/Reject actions between contentIntent and autoCancel.
+bs = bs.replace("            .setFullScreenIntent(contentIntent, true)\n", "")
 bunker_service.write_text(bs, encoding="utf-8")
 
 # Make the existing NIP-46 credential rotation impossible to miss or confuse
