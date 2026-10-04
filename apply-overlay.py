@@ -1092,4 +1092,121 @@ if action_anchor not in bs:
 bs = bs.replace(action_anchor, action_replacement, 1)
 bunker_service.write_text(bs, encoding="utf-8")
 
+
+
+# Persist the last uncaught Android exception and include it in the existing
+# diagnostics export. This gives the next runtime crash a usable stack trace.
+keep_app = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "KeepMobileApp.kt"
+ka = keep_app.read_text(encoding="utf-8")
+ka = ka.replace(
+    """    override fun onCreate() {
+        super.onCreate()
+        initializeKeepMobile()
+""",
+    """    override fun onCreate() {
+        super.onCreate()
+        installCrashCapture()
+        initializeKeepMobile()
+""",
+    1,
+)
+crash_method_anchor = """    private fun initializeKeepMobile() {
+"""
+crash_method = r'''    private fun installCrashCapture() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                val crashFile = java.io.File(filesDir, "last_crash.txt")
+                val report = buildString {
+                    appendLine("timestamp=" + java.time.Instant.now().toString())
+                    appendLine("thread=" + thread.name)
+                    appendLine("exception=" + throwable::class.java.name)
+                    appendLine("message=" + (throwable.message ?: ""))
+                    appendLine()
+                    appendLine(throwable.stackTraceToString())
+                }
+                crashFile.writeText(report, Charsets.UTF_8)
+            }
+            if (previous != null) {
+                previous.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
+        }
+    }
+
+'''
+if crash_method_anchor not in ka:
+    raise SystemExit("KeepMobileApp crash-method anchor not found")
+ka = ka.replace(crash_method_anchor, crash_method + crash_method_anchor, 1)
+keep_app.write_text(ka, encoding="utf-8")
+
+export_logs = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "ExportLogsScreen.kt"
+el = export_logs.read_text(encoding="utf-8")
+el = el.replace(
+    "import android.content.ActivityNotFoundException\n",
+    "import android.content.ActivityNotFoundException\nimport android.content.Context\n",
+    1,
+)
+el = el.replace(
+    """                    buildExportContent(
+                        keepMobile = keepMobile,
+""",
+    """                    buildExportContent(
+                        context = context,
+                        keepMobile = keepMobile,
+""",
+    1,
+)
+el = el.replace(
+    """private suspend fun buildExportContent(
+    keepMobile: KeepMobile,
+""",
+    """private suspend fun buildExportContent(
+    context: Context,
+    keepMobile: KeepMobile,
+""",
+    1,
+)
+crash_read_anchor = """    return buildString {
+        appendLine("=== Keep Diagnostics ===")
+"""
+crash_read_replacement = r'''    val lastCrash = runCatching {
+        File(context.filesDir, "last_crash.txt")
+            .takeIf { it.isFile }
+            ?.readText(Charsets.UTF_8)
+            ?.take(100_000)
+    }.getOrNull()
+
+    return buildString {
+        appendLine("=== Keep Diagnostics ===")
+'''
+if crash_read_anchor not in el:
+    raise SystemExit("ExportLogs buildString anchor not found")
+el = el.replace(crash_read_anchor, crash_read_replacement, 1)
+
+activity_tail = """        if (activityLogResult == null) {
+            appendLine("(unavailable)")
+        } else {
+            val (text, exported, total) = activityLogResult
+            if (total > exported) {
+                appendLine("(truncated to $exported of $total entries)")
+            }
+            if (text.isBlank()) appendLine("(no activity)") else appendLine(text)
+        }
+"""
+activity_replacement = activity_tail + r'''        appendLine()
+        appendLine("=== Last Uncaught Crash ===")
+        if (lastCrash.isNullOrBlank()) {
+            appendLine("(none captured)")
+        } else {
+            appendLine(lastCrash)
+        }
+'''
+if activity_tail not in el:
+    raise SystemExit("ExportLogs activity tail not found")
+el = el.replace(activity_tail, activity_replacement, 1)
+export_logs.write_text(el, encoding="utf-8")
+
 print("Igloo Mobile overlay applied successfully")
