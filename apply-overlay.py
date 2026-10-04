@@ -1209,4 +1209,93 @@ if activity_tail not in el:
 el = el.replace(activity_tail, activity_replacement, 1)
 export_logs.write_text(el, encoding="utf-8")
 
+
+# FROSTFED_NOTIFICATION_PERMISSION_PATCH
+# Android 13+ notifications are opt-in at runtime. Upstream declares
+# POST_NOTIFICATIONS but does not request it, so NIP-46 approval prompts can be
+# silently suppressed on a fresh install.
+main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
+ma = main_activity.read_text(encoding="utf-8")
+ma = ma.replace(
+    "import android.content.Context\n",
+    "import android.Manifest\n"
+    "import android.content.Context\n"
+    "import android.content.pm.PackageManager\n"
+    "import android.os.Build\n",
+    1,
+)
+ma = ma.replace(
+    "import androidx.activity.compose.setContent\n",
+    "import androidx.activity.compose.setContent\n"
+    "import androidx.activity.result.contract.ActivityResultContracts\n"
+    "import androidx.core.content.ContextCompat\n",
+    1,
+)
+old_oncreate = """    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val app = application as? KeepMobileApp ?: run { finish(); return }
+"""
+new_oncreate = """    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Signing requests arrive through the NIP-46 foreground service. Android
+        // 13+ starts fresh installs with normal notifications disabled until the
+        // app asks at runtime; without this request approvals can appear to vanish.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED) {
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                if (!granted && BuildConfig.DEBUG) {
+                    Log.w("MainActivity", "Notification permission denied; signing approvals will only be visible in-app")
+                }
+            }.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        val app = application as? KeepMobileApp ?: run { finish(); return }
+"""
+if old_oncreate not in ma:
+    raise SystemExit("MainActivity onCreate anchor not found")
+ma = ma.replace(old_oncreate, new_oncreate, 1)
+main_activity.write_text(ma, encoding="utf-8")
+
+# Keep approval requests Amber-like: high-priority notification that opens the
+# approval activity when tapped. Do not request a full-screen intent; modern
+# Android reserves that path for alarm/call-style use cases and it is unnecessary
+# for a Nostr signing request.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+bs = bs.replace(
+    """            .setContentIntent(contentIntent)
+            .setFullScreenIntent(contentIntent, true)
+            .setAutoCancel(true)
+""",
+    """            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+""",
+    1,
+)
+bunker_service.write_text(bs, encoding="utf-8")
+
+# Make the existing NIP-46 credential rotation impossible to miss or confuse
+# with FROST share refresh.
+connection_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_connections.xml"
+cs = connection_strings.read_text(encoding="utf-8")
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_button">Rotate Bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_button">Rotate NIP-46 Bunker Keys / URL</string>',
+    1,
+)
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_title">Rotate Bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_title">Rotate NIP-46 Bunker Credentials</string>',
+    1,
+)
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_confirm">Rotate URL</string>',
+    '<string name="connections_bunker_rotate_url_confirm">Rotate Credentials</string>',
+    1,
+)
+connection_strings.write_text(cs, encoding="utf-8")
+
 print("Igloo Mobile overlay applied successfully")
