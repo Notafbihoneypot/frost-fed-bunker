@@ -509,6 +509,50 @@ if old_call not in ma:
     raise SystemExit("MainActivity CreateGroupScreen call not found")
 main_activity.write_text(ma.replace(old_call, new_call, 1), encoding="utf-8")
 
+# Android 13+ notification permission. The manifest declares the permission,
+# but modern Android requires a runtime prompt before approval notifications
+# can appear.
+ma = main_activity.read_text(encoding="utf-8")
+ma = ma.replace(
+    "import android.content.Context\n",
+    "import android.Manifest\n"
+    "import android.content.Context\n"
+    "import android.content.pm.PackageManager\n"
+    "import android.os.Build\n",
+    1,
+)
+ma = ma.replace(
+    "import androidx.fragment.app.FragmentActivity\n",
+    "import androidx.fragment.app.FragmentActivity\n"
+    "import androidx.core.content.ContextCompat\n",
+    1,
+)
+oncreate_anchor = """        super.onCreate(savedInstanceState)
+
+        val app = application as? KeepMobileApp ?: run { finish(); return }
+"""
+oncreate_replacement = """        super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                4601
+            )
+        }
+
+        val app = application as? KeepMobileApp ?: run { finish(); return }
+"""
+if oncreate_anchor not in ma:
+    raise SystemExit("MainActivity onCreate anchor not found")
+ma = ma.replace(oncreate_anchor, oncreate_replacement, 1)
+main_activity.write_text(ma, encoding="utf-8")
+
+
 share_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_share.xml"
 ss = share_strings.read_text(encoding="utf-8")
 offline_strings = """
@@ -531,5 +575,54 @@ offline_strings = """
 if "</resources>" not in ss:
     raise SystemExit("strings_share.xml missing resources terminator")
 share_strings.write_text(ss.replace("</resources>", offline_strings + "</resources>", 1), encoding="utf-8")
+
+
+
+# Harden bunker foreground notification paths. A failed notification or FGS
+# promotion should set an error state instead of taking down the whole process.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+old_start = """        startForeground(NOTIFICATION_ID, createNotification(isActive = false))
+"""
+new_start = """        try {
+            startForeground(NOTIFICATION_ID, createNotification(isActive = false))
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "Unable to enter foreground mode", e)
+            _status.value = BunkerStatus.ERROR
+            stopSelf()
+            return START_NOT_STICKY
+        }
+"""
+if old_start not in bs:
+    raise SystemExit("BunkerService startForeground anchor not found")
+bs = bs.replace(old_start, new_start, 1)
+
+old_update = """    private fun updateNotification(isActive: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification(isActive))
+    }
+"""
+new_update = """    private fun updateNotification(isActive: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        runCatching {
+            manager.notify(NOTIFICATION_ID, createNotification(isActive))
+        }.onFailure {
+            if (BuildConfig.DEBUG) Log.e(TAG, "Failed to update bunker notification", it)
+        }
+    }
+"""
+if old_update not in bs:
+    raise SystemExit("BunkerService updateNotification anchor not found")
+bs = bs.replace(old_update, new_update, 1)
+bunker_service.write_text(bs, encoding="utf-8")
+
+connections_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_connections.xml"
+cs = connections_strings.read_text(encoding="utf-8")
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_button">Rotate bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_button">Rotate NIP-46 connection keys</string>',
+    1,
+)
+connections_strings.write_text(cs, encoding="utf-8")
 
 print("Igloo Mobile overlay applied successfully")
