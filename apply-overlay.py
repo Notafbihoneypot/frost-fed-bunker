@@ -1450,4 +1450,42 @@ ma = ma.replace(back_anchor, back_block, 1)
 main_activity.write_text(ma, encoding="utf-8")
 
 
+
+# FROSTFED_METADATA_POLL_FIX
+# The upstream UI polls keepMobile.getActiveShareMetadata() without establishing
+# an authenticated share-decryption request context. That Rust path loads the
+# encrypted share and therefore emits Storage errors every poll. The UI only
+# needs the non-secret didBackup metadata here, which AndroidKeystoreStorage
+# already exposes without decrypting FROST key material.
+main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
+ma = main_activity.read_text(encoding="utf-8")
+old_poll = """                    val db = runCatching { keepMobile.getActiveShareMetadata()?.didBackup }
+                        .onFailure { if (it is CancellationException) throw it }
+                        .getOrNull()
+"""
+new_poll = """                    val db = runCatching { storage.getShareMetadata()?.didBackup }
+                        .onFailure { if (it is CancellationException) throw it }
+                        .getOrNull()
+"""
+if old_poll not in ma:
+    raise SystemExit("MainActivity active-share metadata poll anchor not found")
+ma = ma.replace(old_poll, new_poll, 1)
+main_activity.write_text(ma, encoding="utf-8")
+
+account_actions = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "AccountActions.kt"
+aa = account_actions.read_text(encoding="utf-8")
+old_refresh = """            val activeDidBackup = runCatching { keepMobile.getActiveShareMetadata()?.didBackup }
+                .onFailure { Log.w("AccountActions", "getActiveShareMetadata failed: ${it::class.simpleName}") }
+                .getOrNull()
+"""
+new_refresh = """            val activeDidBackup = runCatching { storage.getShareMetadata()?.didBackup }
+                .onFailure { Log.w("AccountActions", "getShareMetadata failed: ${it::class.simpleName}") }
+                .getOrNull()
+"""
+if old_refresh not in aa:
+    raise SystemExit("AccountActions active-share metadata refresh anchor not found")
+aa = aa.replace(old_refresh, new_refresh, 1)
+account_actions.write_text(aa, encoding="utf-8")
+
+
 print("Frost Fed Bunker FROSTR overlay applied successfully")
