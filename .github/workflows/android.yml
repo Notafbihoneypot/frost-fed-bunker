@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId = "org.glowstr.frostfedbunker"' upstream-keep-android/app/build.gradle.kts
-          grep -q 'versionName = "0.2.0-frostr"' upstream-keep-android/app/build.gradle.kts
+          grep -q 'versionName = "0.2.1-frostr"' upstream-keep-android/app/build.gradle.kts
           grep -q 'Manifest.permission.POST_NOTIFICATIONS' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           ! grep -q 'setFullScreenIntent(contentIntent, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
@@ -74,6 +74,8 @@ jobs:
           grep -q 'Rotate / refresh existing FROST shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
           grep -q 'frost_refresh_exports' upstream-keep-android/keep/keep-mobile/src/lib.rs
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
+          grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
+          grep -q 'BackHandler(enabled = hasTransientScreen)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
 
       - name: Set up JDK 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
@@ -117,18 +119,18 @@ jobs:
           mapfile -t APKS < <(find app/build/outputs/apk/debug -type f -name '*.apk' | sort)
           printf 'Built APKs:\n%s\n' "${APKS[*]}"
           test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk" || \
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk.sha256"
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk" || \
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk"
+          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk.sha256"
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Frost-Fed-Bunker-Android-ARM64
           path: |
-            dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk
-            dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk.sha256
+            dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk
+            dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -138,13 +140,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="v0.2.0-frostr-test"
+          TAG="v0.2.1-frostr-test"
           gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
           gh release create "$TAG" \
-            dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk \
-            dist/Frost-Fed-Bunker-0.2.0-frostr-arm64.apk.sha256 \
+            dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk \
+            dist/Frost-Fed-Bunker-0.2.1-frostr-arm64.apk.sha256 \
             THIRD_PARTY_NOTICES.md \
             --target "$GITHUB_SHA" \
-            --title "Frost Fed Bunker 0.2.0 FROSTR Test" \
-            --notes "FROSTR-focused ARM64 Android test build from the main-frostr branch. Includes Android 13+ notification permission handling, Amber-style NIP-46 signing approval notifications, NIP-46 credential rotation, encrypted FROST share export, offline 2-of-3/3-of-5 share generation, proactive FROST share refresh/rotation, and crash diagnostics. Fresh package identity: org.glowstr.frostfedbunker. Test software; not a completed third-party security audit." \
+            --title "Frost Fed Bunker 0.2.1 FROSTR Test" \
+            --notes "FROSTR-focused ARM64 Android test build from the main-frostr branch. Includes Android 13+ notification permission handling, Amber-style NIP-46 signing approval notifications, NIP-46 credential rotation, encrypted FROST share export, offline 2-of-3/3-of-5 share generation, proactive FROST share refresh/rotation, crash diagnostics, and fixed Compose back/cancel navigation so subpages no longer finish MainActivity. Fresh package identity: org.glowstr.frostfedbunker. Test software; not a completed third-party security audit." \
             --prerelease
