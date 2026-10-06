@@ -1685,6 +1685,7 @@ state_anchor = """    val sessionCanceled = remember { java.util.concurrent.atom
 """
 state_replacement = """    val sessionCanceled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var documentPickerActive by remember { mutableStateOf(false) }
+    val documentPickerActiveState = rememberUpdatedState(documentPickerActive)
     val minLengthMessage = stringResource(R.string.export_share_min_length, MIN_PASSPHRASE_LENGTH)
 """
 if state_anchor not in es:
@@ -1728,7 +1729,7 @@ messages_replacement = """    val authCancelledMessage = stringResource(R.string
         }
     }
 
-    DisposableEffect(lifecycleOwner, documentPickerActive) {
+    DisposableEffect(lifecycleOwner) {
 """
 if messages_anchor not in es:
     raise SystemExit("export file launcher anchor not found")
@@ -1743,7 +1744,7 @@ lifecycle_anchor = """        val observer = LifecycleEventObserver { _, event -
 lifecycle_replacement = """        val observer = LifecycleEventObserver { _, event ->
             if (
                 (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) &&
-                !documentPickerActive
+                !documentPickerActiveState.value
             ) {
                 clearSensitiveData()
             }
