@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 2')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.0-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 3')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.1-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -1339,5 +1339,115 @@ bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "
 bs = bunker_service.read_text(encoding="utf-8")
 bs = bs.replace("            .setFullScreenIntent(contentIntent, true)\n", "")
 bunker_service.write_text(bs, encoding="utf-8")
+
+
+
+# FROSTFED_BACK_NAVIGATION_FIX
+# Upstream MainScreen renders most detail flows as boolean-controlled full-screen
+# composables rather than NavHost destinations. Without a Compose BackHandler,
+# Android back falls through to the single MainActivity and finishes the app.
+# Intercept back only while a transient screen is visible and mirror each
+# screen's normal onDismiss cleanup.
+main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
+ma = main_activity.read_text(encoding="utf-8")
+if "import androidx.activity.compose.BackHandler\n" not in ma:
+    ma = ma.replace(
+        "import androidx.activity.compose.setContent\n",
+        "import androidx.activity.compose.BackHandler\n"
+        "import androidx.activity.compose.setContent\n",
+        1,
+    )
+
+back_anchor = """    LaunchedEffect(relays) {
+        accountActions.setCurrentRelays(relays)
+    }
+
+"""
+back_block = """    LaunchedEffect(relays) {
+        accountActions.setCurrentRelays(relays)
+    }
+
+    val hasTransientScreen =
+        showPinSetup ||
+        showSecuritySettings ||
+        showExportLogs ||
+        showEventLog ||
+        showBackupRestore ||
+        showRecoverNsec ||
+        showSignPolicyScreen ||
+        showRelayAuthWhitelistScreen ||
+        showPermissionsScreen ||
+        showHistoryScreen ||
+        showExportScreen ||
+        showExportNcryptsecScreen ||
+        showShareDetails ||
+        showConnectedApps ||
+        showBunkerScreen ||
+        showWalletDescriptorScreen ||
+        showAccountSwitcher ||
+        showImportScreen ||
+        showCreateGroupScreen ||
+        showImportNsecScreen ||
+        showCreateAccountScreen ||
+        showSeedWordsScreen ||
+        showMnemonicRecoveryScreen
+
+    BackHandler(enabled = hasTransientScreen) {
+        when {
+            showPinSetup -> showPinSetup = false
+            showSecuritySettings -> showSecuritySettings = false
+            showExportLogs -> showExportLogs = false
+            showEventLog -> showEventLog = false
+            showBackupRestore -> showBackupRestore = false
+            showRecoverNsec -> showRecoverNsec = false
+            showSignPolicyScreen -> showSignPolicyScreen = false
+            showRelayAuthWhitelistScreen -> showRelayAuthWhitelistScreen = false
+            showPermissionsScreen -> showPermissionsScreen = false
+            showHistoryScreen -> showHistoryScreen = false
+            showExportScreen -> showExportScreen = false
+            showExportNcryptsecScreen -> showExportNcryptsecScreen = false
+            showShareDetails -> showShareDetails = false
+            showConnectedApps && selectedAppPackage != null -> selectedAppPackage = null
+            showConnectedApps -> showConnectedApps = false
+            showBunkerScreen -> showBunkerScreen = false
+            showWalletDescriptorScreen -> showWalletDescriptorScreen = false
+            showAccountSwitcher -> showAccountSwitcher = false
+            showImportScreen -> {
+                showImportScreen = false
+                importState = ImportState.Idle
+            }
+            showCreateGroupScreen -> {
+                createGroupRun += 1
+                accountActions.cancelDkg()
+                showCreateGroupScreen = false
+                createGroupState = CreateGroupState.Idle
+            }
+            showImportNsecScreen -> {
+                showImportNsecScreen = false
+                importState = ImportState.Idle
+            }
+            showCreateAccountScreen -> {
+                showCreateAccountScreen = false
+                importState = ImportState.Idle
+            }
+            showSeedWordsScreen -> {
+                seedWordsRequestToken += 1
+                seedWordsLoading = false
+                seedWordsData.clear()
+                showSeedWordsScreen = false
+            }
+            showMnemonicRecoveryScreen -> {
+                showMnemonicRecoveryScreen = false
+                importState = ImportState.Idle
+            }
+        }
+    }
+
+"""
+if back_anchor not in ma:
+    raise SystemExit("MainActivity BackHandler insertion anchor not found")
+ma = ma.replace(back_anchor, back_block, 1)
+main_activity.write_text(ma, encoding="utf-8")
+
 
 print("Frost Fed Bunker FROSTR overlay applied successfully")
