@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 4')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.2-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 5')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.3-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -1661,5 +1661,170 @@ if button_anchor not in ma:
 ma = ma.replace(button_anchor, button_replacement, 1)
 
 main_activity.write_text(ma, encoding="utf-8")
+
+
+
+# FROSTFED_SHARE_FILE_EXPORT
+# Upstream only renders the encrypted kshare as QR/clipboard. Add a real
+# Storage Access Framework "Save as" path, and keep the export session alive
+# while Android's document picker temporarily pauses/stops the Activity.
+export_share = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "ExportShareScreen.kt"
+es = export_share.read_text(encoding="utf-8")
+
+if "import androidx.activity.compose.rememberLauncherForActivityResult\n" not in es:
+    es = es.replace(
+        "import android.widget.Toast\n",
+        "import android.widget.Toast\n"
+        "import androidx.activity.compose.rememberLauncherForActivityResult\n"
+        "import androidx.activity.result.contract.ActivityResultContracts\n",
+        1,
+    )
+
+state_anchor = """    val sessionCanceled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val minLengthMessage = stringResource(R.string.export_share_min_length, MIN_PASSPHRASE_LENGTH)
+"""
+state_replacement = """    val sessionCanceled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var documentPickerActive by remember { mutableStateOf(false) }
+    val minLengthMessage = stringResource(R.string.export_share_min_length, MIN_PASSPHRASE_LENGTH)
+"""
+if state_anchor not in es:
+    raise SystemExit("export file state anchor not found")
+es = es.replace(state_anchor, state_replacement, 1)
+
+messages_anchor = """    val authCancelledMessage = stringResource(R.string.export_share_auth_cancelled)
+    val initFailedMessage = stringResource(R.string.export_share_init_failed)
+
+    DisposableEffect(lifecycleOwner) {
+"""
+messages_replacement = """    val authCancelledMessage = stringResource(R.string.export_share_auth_cancelled)
+    val initFailedMessage = stringResource(R.string.export_share_init_failed)
+
+    val saveShareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        documentPickerActive = false
+        if (uri != null) {
+            val exportData = (exportState as? ExportState.Success)?.data.orEmpty()
+            if (exportData.isNotEmpty()) {
+                coroutineScope.launch {
+                    val saved = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openOutputStream(uri, "wt")
+                                ?.bufferedWriter(Charsets.UTF_8)
+                                ?.use { writer ->
+                                    writer.write(exportData)
+                                    writer.newLine()
+                                }
+                                ?: error("Unable to open selected document")
+                        }.isSuccess
+                    }
+                    Toast.makeText(
+                        context,
+                        if (saved) "Encrypted FROST share saved" else "Failed to save encrypted FROST share",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, documentPickerActive) {
+"""
+if messages_anchor not in es:
+    raise SystemExit("export file launcher anchor not found")
+es = es.replace(messages_anchor, messages_replacement, 1)
+
+lifecycle_anchor = """        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+                clearSensitiveData()
+            }
+        }
+"""
+lifecycle_replacement = """        val observer = LifecycleEventObserver { _, event ->
+            if (
+                (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) &&
+                !documentPickerActive
+            ) {
+                clearSensitiveData()
+            }
+        }
+"""
+if lifecycle_anchor not in es:
+    raise SystemExit("export lifecycle anchor not found")
+es = es.replace(lifecycle_anchor, lifecycle_replacement, 1)
+
+success_call_anchor = """                ExportSuccessContent(
+                    data = state.data,
+                    frames = state.frames,
+                    onDismiss = onDismiss
+                )
+"""
+success_call_replacement = """                ExportSuccessContent(
+                    data = state.data,
+                    frames = state.frames,
+                    onSaveToFile = {
+                        documentPickerActive = true
+                        val safeName = shareInfo.name
+                            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+                            .take(48)
+                            .ifBlank { "share" }
+                        saveShareLauncher.launch("Frost-Fed-Bunker-" + safeName + ".kshare")
+                    },
+                    onDismiss = onDismiss
+                )
+"""
+if success_call_anchor not in es:
+    raise SystemExit("export success call anchor not found")
+es = es.replace(success_call_anchor, success_call_replacement, 1)
+
+success_sig_anchor = """private fun ExportSuccessContent(
+    data: String,
+    frames: List<String>,
+    onDismiss: () -> Unit
+) {
+"""
+success_sig_replacement = """private fun ExportSuccessContent(
+    data: String,
+    frames: List<String>,
+    onSaveToFile: () -> Unit,
+    onDismiss: () -> Unit
+) {
+"""
+if success_sig_anchor not in es:
+    raise SystemExit("ExportSuccessContent signature anchor not found")
+es = es.replace(success_sig_anchor, success_sig_replacement, 1)
+
+save_button_anchor = """    Spacer(modifier = Modifier.height(24.dp))
+
+    OutlinedButton(
+        onClick = { showClipboardWarning = true },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(stringResource(R.string.export_share_copy_to_clipboard))
+    }
+"""
+save_button_replacement = """    Spacer(modifier = Modifier.height(24.dp))
+
+    Button(
+        onClick = onSaveToFile,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Save encrypted share to file")
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = { showClipboardWarning = true },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(stringResource(R.string.export_share_copy_to_clipboard))
+    }
+"""
+if save_button_anchor not in es:
+    raise SystemExit("export save button anchor not found")
+es = es.replace(save_button_anchor, save_button_replacement, 1)
+
+export_share.write_text(es, encoding="utf-8")
 
 print("Frost Fed Bunker FROSTR overlay applied successfully")
