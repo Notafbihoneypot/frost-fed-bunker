@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 3')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.1-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 4')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.2-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -1487,5 +1487,179 @@ if old_refresh not in aa:
 aa = aa.replace(old_refresh, new_refresh, 1)
 account_actions.write_text(aa, encoding="utf-8")
 
+
+
+
+# FROSTFED_DIRECT_SHARE_ROTATION_UI
+# Surface the existing offline share-refresh engine directly from the active
+# FROST account screen. Previously the code was only reachable by opening the
+# create-group flow and switching to the offline tab, so existing users had no
+# obvious "rotate shares" action.
+create_group = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "CreateGroupScreen.kt"
+cg = create_group.read_text(encoding="utf-8")
+
+rotation_wrapper_anchor = """private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
+
+@Composable
+private fun OfflineGroupMode(keepMobile: KeepMobile) {
+"""
+rotation_wrapper = """@Composable
+fun FrostShareRotationScreen(
+    keepMobile: KeepMobile,
+    onDismiss: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(24.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Rotate FROST Shares",
+            style = MaterialTheme.typography.headlineMedium
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        OfflineRefreshMode(keepMobile = keepMobile, onBack = onDismiss)
+    }
+}
+
+private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
+
+@Composable
+private fun OfflineGroupMode(keepMobile: KeepMobile) {
+"""
+if rotation_wrapper_anchor not in cg:
+    raise SystemExit("share rotation wrapper anchor not found")
+cg = cg.replace(rotation_wrapper_anchor, rotation_wrapper, 1)
+create_group.write_text(cg, encoding="utf-8")
+
+main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
+ma = main_activity.read_text(encoding="utf-8")
+
+state_anchor = """    var showCreateGroupScreen by remember { mutableStateOf(false) }
+"""
+state_replacement = """    var showCreateGroupScreen by remember { mutableStateOf(false) }
+    var showShareRotationScreen by remember { mutableStateOf(false) }
+"""
+if state_anchor not in ma:
+    raise SystemExit("share rotation state anchor not found")
+ma = ma.replace(state_anchor, state_replacement, 1)
+
+transient_anchor = """        showImportScreen ||
+        showCreateGroupScreen ||
+        showImportNsecScreen ||
+"""
+transient_replacement = """        showImportScreen ||
+        showCreateGroupScreen ||
+        showShareRotationScreen ||
+        showImportNsecScreen ||
+"""
+if transient_anchor not in ma:
+    raise SystemExit("share rotation BackHandler enable anchor not found")
+ma = ma.replace(transient_anchor, transient_replacement, 1)
+
+back_case_anchor = """            showCreateGroupScreen -> {
+                createGroupRun += 1
+                accountActions.cancelDkg()
+                showCreateGroupScreen = false
+                createGroupState = CreateGroupState.Idle
+            }
+            showImportNsecScreen -> {
+"""
+back_case_replacement = """            showCreateGroupScreen -> {
+                createGroupRun += 1
+                accountActions.cancelDkg()
+                showCreateGroupScreen = false
+                createGroupState = CreateGroupState.Idle
+            }
+            showShareRotationScreen -> showShareRotationScreen = false
+            showImportNsecScreen -> {
+"""
+if back_case_anchor not in ma:
+    raise SystemExit("share rotation BackHandler case anchor not found")
+ma = ma.replace(back_case_anchor, back_case_replacement, 1)
+
+screen_anchor = """    if (showCreateGroupScreen) {
+"""
+screen_block = """    if (showShareRotationScreen) {
+        FrostShareRotationScreen(
+            keepMobile = keepMobile,
+            onDismiss = { showShareRotationScreen = false }
+        )
+        return
+    }
+
+    if (showCreateGroupScreen) {
+"""
+if screen_anchor not in ma:
+    raise SystemExit("share rotation screen insertion anchor not found")
+ma = ma.replace(screen_anchor, screen_block, 1)
+
+account_call_anchor = """                    onRecoverNsec = { showRecoverNsec = true },
+                    onCreateGroup = { showCreateGroupScreen = true }
+"""
+account_call_replacement = """                    onRecoverNsec = { showRecoverNsec = true },
+                    onRotateShares = { showShareRotationScreen = true },
+                    onCreateGroup = { showCreateGroupScreen = true }
+"""
+if account_call_anchor not in ma:
+    raise SystemExit("AccountTab call anchor not found")
+ma = ma.replace(account_call_anchor, account_call_replacement, 1)
+
+account_sig_anchor = """    onRecoverMnemonic: () -> Unit,
+    onRecoverNsec: () -> Unit,
+    onCreateGroup: () -> Unit
+) {
+"""
+account_sig_replacement = """    onRecoverMnemonic: () -> Unit,
+    onRecoverNsec: () -> Unit,
+    onRotateShares: () -> Unit,
+    onCreateGroup: () -> Unit
+) {
+"""
+if account_sig_anchor not in ma:
+    raise SystemExit("AccountTab signature anchor not found")
+ma = ma.replace(account_sig_anchor, account_sig_replacement, 1)
+
+button_anchor = """                    if (shareInfo.threshold >= 2u.toUShort()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onRecoverNsec,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text(stringResource(R.string.main_recover_nsec_from_shares))
+                        }
+                    }
+"""
+button_replacement = """                    if (shareInfo.threshold >= 2u.toUShort()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = onRotateShares,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Rotate FROST Shares")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onRecoverNsec,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text(stringResource(R.string.main_recover_nsec_from_shares))
+                        }
+                    }
+"""
+if button_anchor not in ma:
+    raise SystemExit("AccountTab threshold action anchor not found")
+ma = ma.replace(button_anchor, button_replacement, 1)
+
+main_activity.write_text(ma, encoding="utf-8")
 
 print("Frost Fed Bunker FROSTR overlay applied successfully")
