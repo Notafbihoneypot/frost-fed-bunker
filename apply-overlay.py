@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Frost Fed Bunker Android overlay.
-"""Apply the minimal Igloo Mobile overlay to a pinned Keep Android checkout."""
+"""Apply the Frost Fed Bunker FROSTR overlay to a pinned Keep Android checkout."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 
 gradle = root / "app" / "build.gradle.kts"
-replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.igloomobile"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 1')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.1.0-test"')
+replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 2')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.0-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -42,34 +42,34 @@ strings = root / "app" / "src" / "main" / "res" / "values" / "strings.xml"
 replace_once(
     strings,
     '<string name="app_name" translatable="false">Keep</string>',
-    '<string name="app_name" translatable="false">Igloo Mobile</string>',
+    '<string name="app_name" translatable="false">Frost Fed Bunker</string>',
 )
 replace_once(
     strings,
     '<string name="foreground_service_title" translatable="false">Keep</string>',
-    '<string name="foreground_service_title" translatable="false">Igloo Mobile</string>',
+    '<string name="foreground_service_title" translatable="false">Frost Fed Bunker</string>',
 )
 replace_once(
     strings,
     '<string name="bunker_service_title" translatable="false">Keep Bunker</string>',
-    '<string name="bunker_service_title" translatable="false">Igloo Mobile Bunker</string>',
+    '<string name="bunker_service_title" translatable="false">Frost Fed Bunker Signer</string>',
 )
 replace_once(
     strings,
     '<string name="biometric_unlock_title" translatable="false">Keep</string>',
-    '<string name="biometric_unlock_title" translatable="false">Igloo Mobile</string>',
+    '<string name="biometric_unlock_title" translatable="false">Frost Fed Bunker</string>',
 )
 
 main_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_main.xml"
 replace_once(
     main_strings,
     '<string name="main_unlock_title">Unlock Keep</string>',
-    '<string name="main_unlock_title">Unlock Igloo Mobile</string>',
+    '<string name="main_unlock_title">Unlock Frost Fed Bunker</string>',
 )
 replace_once(
     main_strings,
     '<string name="main_home_title">Keep</string>',
-    '<string name="main_home_title">Igloo Mobile</string>',
+    '<string name="main_home_title">Frost Fed Bunker</string>',
 )
 replace_once(
     main_strings,
@@ -86,6 +86,19 @@ replace_once(
     '<string name="main_create_account_button">Create Account</string>',
     '<string name="main_create_account_button">Create single-key account (advanced)</string>',
 )
+
+ms = main_strings.read_text(encoding="utf-8")
+ms = ms.replace(
+    '<string name="main_export_share_button">Export Share</string>',
+    '<string name="main_export_share_button">Export encrypted FROST share backup</string>',
+    1,
+)
+ms = ms.replace(
+    '<string name="main_keys_title">Keys</string>',
+    '<string name="main_keys_title">FROST Shares</string>',
+    1,
+)
+main_strings.write_text(ms, encoding="utf-8")
 
 manifest = root / "app" / "src" / "main" / "AndroidManifest.xml"
 text = manifest.read_text(encoding="utf-8")
@@ -925,7 +938,7 @@ share_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_shar
 ss = share_strings.read_text(encoding="utf-8")
 offline_strings = """
     <!-- Igloo Mobile advanced offline trusted-dealer setup -->
-    <string name="igloo_offline_tab">Offline</string>
+    <string name="igloo_offline_tab">Shares / Rotate</string>
     <string name="igloo_offline_warning">Advanced setup: this phone temporarily generates the complete threshold key material and every share. Use an offline, trusted device. Distributed setup is safer because no single device ever holds the whole key.</string>
     <string name="igloo_offline_passphrase">Share export passphrase</string>
     <string name="igloo_offline_confirm_passphrase">Confirm passphrase</string>
@@ -987,8 +1000,18 @@ bunker_service.write_text(bs, encoding="utf-8")
 connections_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_connections.xml"
 cs = connections_strings.read_text(encoding="utf-8")
 cs = cs.replace(
-    '<string name="connections_bunker_rotate_url_button">Rotate bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_button">Rotate Bunker URL</string>',
     '<string name="connections_bunker_rotate_url_button">Rotate NIP-46 connection keys</string>',
+    1,
+)
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_title">Rotate Bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_title">Rotate NIP-46 connection keys</string>',
+    1,
+)
+cs = cs.replace(
+    '<string name="connections_bunker_rotate_url_confirm">Rotate URL</string>',
+    '<string name="connections_bunker_rotate_url_confirm">Rotate keys</string>',
     1,
 )
 connections_strings.write_text(cs, encoding="utf-8")
@@ -1113,7 +1136,7 @@ class Nip46ApprovalActionReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        const val ACTION_REJECT = "org.glowstr.igloomobile.NIP46_REJECT"
+        const val ACTION_REJECT = "org.glowstr.frostfedbunker.NIP46_REJECT"
         const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
     }
 }
@@ -1317,4 +1340,4 @@ bs = bunker_service.read_text(encoding="utf-8")
 bs = bs.replace("            .setFullScreenIntent(contentIntent, true)\n", "")
 bunker_service.write_text(bs, encoding="utf-8")
 
-print("Igloo Mobile overlay applied successfully")
+print("Frost Fed Bunker FROSTR overlay applied successfully")
