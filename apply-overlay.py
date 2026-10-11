@@ -1841,7 +1841,8 @@ if "import android.content.ClipboardManager\n" not in ins:
         "package io.privkey.keep\n\n",
         "package io.privkey.keep\n\n"
         "import android.content.ClipboardManager\n"
-        "import android.content.Context\n",
+        "import android.content.Context\n"
+        "import android.widget.Toast\n",
         1,
     )
 
