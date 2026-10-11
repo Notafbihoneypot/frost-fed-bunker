@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 5')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.3-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 6')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.4-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -1827,5 +1827,132 @@ if save_button_anchor not in es:
 es = es.replace(save_button_anchor, save_button_replacement, 1)
 
 export_share.write_text(es, encoding="utf-8")
+
+
+
+# FROSTFED_PASTE_NSEC_IMPORT
+# Make importing an existing Nostr account explicit: users can paste an nsec
+# from the clipboard with one tap instead of relying on long-press paste.
+import_nsec = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "ImportNsecScreen.kt"
+ins = import_nsec.read_text(encoding="utf-8")
+
+if "import android.content.ClipboardManager\n" not in ins:
+    ins = ins.replace(
+        "package io.privkey.keep\n\n",
+        "package io.privkey.keep\n\n"
+        "import android.content.ClipboardManager\n"
+        "import android.content.Context\n",
+        1,
+    )
+
+msg_anchor = """    val biometricUnavailableMsg = stringResource(R.string.import_nsec_biometric_unavailable)
+    val cipherFailedMsg = stringResource(R.string.import_nsec_cipher_failed)
+"""
+msg_replacement = """    val biometricUnavailableMsg = stringResource(R.string.import_nsec_biometric_unavailable)
+    val cipherFailedMsg = stringResource(R.string.import_nsec_cipher_failed)
+    val pasteEmptyMsg = stringResource(R.string.import_nsec_paste_empty)
+    val pasteInvalidMsg = stringResource(R.string.import_nsec_paste_invalid)
+    val pasteTooLongMsg = stringResource(R.string.import_nsec_paste_too_long)
+    val pastedMsg = stringResource(R.string.import_nsec_pasted)
+"""
+if msg_anchor not in ins:
+    raise SystemExit("ImportNsec message anchor not found")
+ins = ins.replace(msg_anchor, msg_replacement, 1)
+
+button_anchor = """        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = { showScanner = true },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isInputEnabled
+        ) {
+            Text(stringResource(R.string.import_nsec_scan_qr))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+"""
+button_replacement = """        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val pasted = clipboard.primaryClip
+                    ?.takeIf { it.itemCount > 0 }
+                    ?.getItemAt(0)
+                    ?.coerceToText(context)
+                    ?.toString()
+                    ?.trim()
+                    .orEmpty()
+
+                when {
+                    pasted.isBlank() -> scanError = pasteEmptyMsg
+                    pasted.length > MAX_NSEC_LENGTH -> scanError = pasteTooLongMsg
+                    !isValidNsecFormat(pasted) -> scanError = pasteInvalidMsg
+                    else -> {
+                        scanError = null
+                        nsecData.update(pasted)
+                        nsecDisplay = pasted
+                        // Reduce the lifetime of the private key in the system clipboard
+                        // after a successful explicit paste.
+                        runCatching { clipboard.clearPrimaryClip() }
+                        Toast.makeText(context, pastedMsg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isInputEnabled
+        ) {
+            Text(stringResource(R.string.import_nsec_paste))
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = { showScanner = true },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = isInputEnabled
+        ) {
+            Text(stringResource(R.string.import_nsec_scan_qr))
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+"""
+if button_anchor not in ins:
+    raise SystemExit("ImportNsec button anchor not found")
+ins = ins.replace(button_anchor, button_replacement, 1)
+
+import_nsec.write_text(ins, encoding="utf-8")
+
+backup_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_backup.xml"
+sb = backup_strings.read_text(encoding="utf-8")
+strings_anchor = """    <string name="import_nsec_scan_qr">Scan QR Code</string>
+    <string name="import_nsec_key_name_label">Key Name</string>
+"""
+strings_replacement = """    <string name="import_nsec_scan_qr">Scan QR Code</string>
+    <string name="import_nsec_paste">Paste nsec</string>
+    <string name="import_nsec_paste_empty">Clipboard is empty</string>
+    <string name="import_nsec_paste_invalid">Clipboard does not contain a valid nsec1 private key</string>
+    <string name="import_nsec_paste_too_long">Clipboard content is too long to be an nsec</string>
+    <string name="import_nsec_pasted">nsec pasted securely; clipboard cleared</string>
+    <string name="import_nsec_key_name_label">Account Name</string>
+"""
+if strings_anchor not in sb:
+    raise SystemExit("ImportNsec string anchor not found")
+sb = sb.replace(strings_anchor, strings_replacement, 1)
+backup_strings.write_text(sb, encoding="utf-8")
+
+main_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_main.xml"
+ms = main_strings.read_text(encoding="utf-8")
+ms = ms.replace(
+    '<string name="main_import_nsec_button">Import nsec</string>',
+    '<string name="main_import_nsec_button">Import / paste nsec</string>',
+    1,
+)
+ms = ms.replace(
+    '<string name="account_import_nsec">Import nsec</string>',
+    '<string name="account_import_nsec">Import / paste nsec</string>',
+    1,
+)
+main_strings.write_text(ms, encoding="utf-8")
 
 print("Frost Fed Bunker FROSTR overlay applied successfully")
