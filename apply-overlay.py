@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 6')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.4-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 7')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.5-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -1955,5 +1955,102 @@ ms = ms.replace(
     1,
 )
 main_strings.write_text(ms, encoding="utf-8")
+
+
+# FROSTFED_BUNKER_RELAY_LIFECYCLE_025
+# Keep Android's status in sync with the asynchronous Rust NIP-46 server.
+# Without this, a one-time STARTING snapshot can stay forever and hide the
+# bunker:// URL even after the Rust engine transitions to RUNNING.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+
+network_old = """        networkManager = NetworkConnectivityManager(this) {
+            serviceScope.launch {
+                val shouldRestart = startStopMutex.withLock {
+                    val handler = bunkerHandler ?: return@withLock false
+                    if (handler.getBunkerStatus() == BunkerStatus.RUNNING) {
+                        handler.stopBunker()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (shouldRestart) startBunker(keepMobile, relays)
+            }
+        }
+"""
+network_new = """        networkManager = NetworkConnectivityManager(this) {
+            serviceScope.launch {
+                val shouldRestart = startStopMutex.withLock {
+                    val handler = bunkerHandler ?: return@withLock false
+                    when (handler.getBunkerStatus()) {
+                        BunkerStatus.RUNNING, BunkerStatus.ERROR, BunkerStatus.STOPPED -> {
+                            handler.stopBunker()
+                            _bunkerUrl.value = null
+                            _status.value = BunkerStatus.STARTING
+                            true
+                        }
+                        BunkerStatus.STARTING -> false
+                    }
+                }
+                if (shouldRestart) {
+                    // Do not reconnect with the relay list captured at service startup:
+                    // a user may have changed bunker relays while this service existed.
+                    val latestRelays = runCatching {
+                        keepMobile.getRelayConfig(null).bunkerRelays
+                    }.getOrDefault(emptyList())
+                    if (latestRelays.isNotEmpty()) {
+                        startBunker(keepMobile, latestRelays)
+                    } else {
+                        _status.value = BunkerStatus.ERROR
+                    }
+                }
+            }
+        }
+"""
+if bs.count(network_old) != 1:
+    raise SystemExit("BunkerService network callback anchor absent/duplicated")
+bs = bs.replace(network_old, network_new, 1)
+
+status_old = """            val url = handler.getBunkerUrl()
+            _bunkerUrl.value = url
+            _status.value = handler.getBunkerStatus()
+
+            updateNotification(isActive = true)
+
+            processQueuedNostrConnectRequests()
+"""
+status_new = """            val url = handler.getBunkerUrl()
+            _bunkerUrl.value = url
+            _status.value = handler.getBunkerStatus()
+
+            // The Rust core starts the server task asynchronously. getBunkerStatus()
+            // can still be STARTING here, so observe the actual engine lifecycle
+            // rather than permanently freezing the screen at the startup sample.
+            serviceScope.launch {
+                while (bunkerHandler === handler) {
+                    val current = runCatching { handler.getBunkerStatus() }
+                        .getOrDefault(BunkerStatus.ERROR)
+                    if (_status.value != current) {
+                        _status.value = current
+                        updateNotification(isActive = current == BunkerStatus.RUNNING)
+                    }
+                    if (current == BunkerStatus.ERROR || current == BunkerStatus.STOPPED) {
+                        _bunkerUrl.value = null
+                        break
+                    }
+                    delay(300L)
+                }
+            }
+
+            updateNotification(isActive = _status.value == BunkerStatus.RUNNING)
+
+            processQueuedNostrConnectRequests()
+"""
+if bs.count(status_old) != 1:
+    raise SystemExit("BunkerService async status anchor absent/duplicated")
+bs = bs.replace(status_old, status_new, 1)
+
+bunker_service.write_text(bs, encoding="utf-8")
 
 print("Frost Fed Bunker FROSTR overlay applied successfully")
