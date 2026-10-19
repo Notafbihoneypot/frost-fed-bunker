@@ -2179,9 +2179,22 @@ observer_old = """            serviceScope.launch {
 """
 observer_new = """            serviceScope.launch {
                 var healthySince = 0L
+                // A relay handshake may never leave STARTING. Treat an
+                // indefinitely stalled handshake as a recoverable failure,
+                // using the same bounded retry path as ERROR and STOPPED.
+                val startedAt = android.os.SystemClock.elapsedRealtime()
                 while (bunkerHandler === handler) {
-                    val current = runCatching { handler.getBunkerStatus() }
+                    val reported = runCatching { handler.getBunkerStatus() }
                         .getOrDefault(BunkerStatus.ERROR)
+                    val current = if (
+                        reported == BunkerStatus.STARTING &&
+                        android.os.SystemClock.elapsedRealtime() - startedAt >= 45_000L
+                    ) {
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Bunker startup timed out")
+                        BunkerStatus.ERROR
+                    } else {
+                        reported
+                    }
                     if (_status.value != current) {
                         _status.value = current
                         updateNotification(isActive = current == BunkerStatus.RUNNING)
