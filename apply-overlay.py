@@ -2053,4 +2053,188 @@ bs = bs.replace(status_old, status_new, 1)
 
 bunker_service.write_text(bs, encoding="utf-8")
 
+
+
+# FROSTFED_BUNKER_RELAY_RECOVERY_026
+# Make the UI wait until the relay configuration has been committed before
+# allowing bunker startup. Previously a user could press Enable immediately
+# after Add and the service would still read the old (empty) relay list.
+bunker_screen = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerScreen.kt"
+screen = bunker_screen.read_text(encoding="utf-8")
+save_old = """    fun saveBunkerRelays(updated: List<String>) {
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val config = keepMobile.getRelayConfig(null)
+                    keepMobile.saveRelayConfig(null, RelayConfigInfo(config.frostRelays, config.profileRelays, updated))
+                }
+            }.onFailure {
+                Toast.makeText(context, toastSaveRelayFailed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+"""
+save_new = """    fun saveBunkerRelays(updated: List<String>) {
+        if (savingRelays) return
+        savingRelays = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val config = keepMobile.getRelayConfig(null)
+                    keepMobile.saveRelayConfig(
+                        null, RelayConfigInfo(config.frostRelays, config.profileRelays, updated)
+                    )
+                }
+                // Only show persisted relays as available for bunker startup.
+                relays = updated
+            } catch (e: Exception) {
+                Toast.makeText(context, toastSaveRelayFailed, Toast.LENGTH_SHORT).show()
+            } finally {
+                savingRelays = false
+            }
+        }
+    }
+"""
+if screen.count(save_old) != 1:
+    raise SystemExit("BunkerScreen save-relay transaction anchor missing")
+screen = screen.replace(save_old, save_new, 1)
+old_state = """    var relays by remember { mutableStateOf<List<String>>(emptyList()) }
+"""
+if screen.count(old_state) != 1:
+    raise SystemExit("BunkerScreen relay state anchor missing")
+screen = screen.replace(old_state, old_state + """    var savingRelays by remember { mutableStateOf(false) }
+""", 1)
+old_toggle = """            canEnable = relays.isNotEmpty(),
+            onToggle = { enabled ->
+"""
+new_toggle = """            canEnable = relays.isNotEmpty() && !savingRelays,
+            onToggle = { enabled ->
+                if (savingRelays) return@BunkerToggleCard
+"""
+if screen.count(old_toggle) != 1:
+    raise SystemExit("BunkerScreen toggle anchor missing")
+screen = screen.replace(old_toggle, new_toggle, 1)
+
+for old, new in [
+    ("""                relays = updated
+                saveBunkerRelays(updated)
+""", """                saveBunkerRelays(updated)
+"""),
+    ("""                relays = updated
+                saveBunkerRelays(updated)
+""", """                saveBunkerRelays(updated)
+"""),
+]:
+    if old in screen:
+        screen = screen.replace(old, new, 1)
+
+# Fail closed rather than making the UI imply an active bunker on an error.
+status_anchor = """        StatusBadge(bunkerStatus)
+
+        Spacer(modifier = Modifier.height(16.dp))
+"""
+status_replacement = """        StatusBadge(bunkerStatus)
+        if (bunkerStatus == BunkerStatus.ERROR) {
+            Text(
+                "Bunker connection failed. Check the NIP-46 relay list and network, " +
+                    "then turn the bunker off and on to retry.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+"""
+if screen.count(status_anchor) != 1:
+    raise SystemExit("BunkerScreen status anchor missing")
+screen = screen.replace(status_anchor, status_replacement, 1)
+bunker_screen.write_text(screen, encoding="utf-8")
+
+# Repair stale NIP-46 engine states after a relay disconnect; only a small
+# bounded number of retries are allowed, and persisted relay settings are
+# re-read for every attempt. Do not rotate credentials or weaken auth.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+field = """    private var bunkerHandler: BunkerHandler? = null
+"""
+if bs.count(field) != 1:
+    raise SystemExit("BunkerService handler field anchor missing")
+bs = bs.replace(field, field + """    private var recoveryAttempts = 0
+""", 1)
+observer_old = """            serviceScope.launch {
+                while (bunkerHandler === handler) {
+                    val current = runCatching { handler.getBunkerStatus() }
+                        .getOrDefault(BunkerStatus.ERROR)
+                    if (_status.value != current) {
+                        _status.value = current
+                        updateNotification(isActive = current == BunkerStatus.RUNNING)
+                    }
+                    if (current == BunkerStatus.ERROR || current == BunkerStatus.STOPPED) {
+                        _bunkerUrl.value = null
+                        break
+                    }
+                    delay(300L)
+                }
+            }
+"""
+observer_new = """            serviceScope.launch {
+                var healthySince = 0L
+                while (bunkerHandler === handler) {
+                    val current = runCatching { handler.getBunkerStatus() }
+                        .getOrDefault(BunkerStatus.ERROR)
+                    if (_status.value != current) {
+                        _status.value = current
+                        updateNotification(isActive = current == BunkerStatus.RUNNING)
+                    }
+                    // Do not advertise the bunker URL unless the Rust engine is
+                    // running. A successful start() call is not proof of it.
+                    _bunkerUrl.value = if (current == BunkerStatus.RUNNING) {
+                        runCatching { handler.getBunkerUrl() }.getOrNull()
+                    } else {
+                        null
+                    }
+                    if (current == BunkerStatus.RUNNING) {
+                        if (healthySince == 0L) {
+                            healthySince = android.os.SystemClock.elapsedRealtime()
+                        }
+                        // Only forget failures after a sustained healthy run.
+                        if (android.os.SystemClock.elapsedRealtime() - healthySince > 30000L) {
+                            recoveryAttempts = 0
+                        }
+                    } else {
+                        healthySince = 0L
+                    }
+                    if (current == BunkerStatus.ERROR || current == BunkerStatus.STOPPED) {
+                        _status.value = BunkerStatus.ERROR
+                        _bunkerUrl.value = null
+                        val attempt = ++recoveryAttempts
+                        if (attempt <= 3) {
+                            serviceScope.launch {
+                                delay(2000L * attempt)
+                                val enabled = runCatching {
+                                    keepMobile.getBunkerConfig().enabled
+                                }.getOrDefault(false)
+                                val sameHandler = startStopMutex.withLock {
+                                    bunkerHandler === handler
+                                }
+                                if (enabled && sameHandler) {
+                                    val fresh = runCatching {
+                                        keepMobile.getRelayConfig(null).bunkerRelays
+                                    }.getOrDefault(emptyList())
+                                    if (fresh.isNotEmpty()) startBunker(keepMobile, fresh)
+                                }
+                            }
+                        }
+                        break
+                    }
+                    delay(500L)
+                }
+            }
+"""
+if bs.count(observer_old) != 1:
+    raise SystemExit("BunkerService 0.2.5 status observer anchor missing")
+bs = bs.replace(observer_old, observer_new, 1)
+bunker_service.write_text(bs, encoding="utf-8")
+
+
 print("Frost Fed Bunker FROSTR overlay applied successfully")
