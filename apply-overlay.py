@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 7')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.5-frostr"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 8')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.6-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
