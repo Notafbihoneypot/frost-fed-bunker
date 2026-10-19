@@ -80,6 +80,37 @@ The current Rust core exports shares as `kshare1...`.
 
 We have **not** established byte-for-byte compatibility with Bifrost/Igloo `bfshare1...` or `bfgroup1...` formats. Glowstr interoperability currently uses NIP-46, so Glowstr does not need to import the FROST share format itself.
 
+## Bunker and relay troubleshooting (0.2.6)
+
+The NIP-46 **Bunker Relays** and threshold-signing **FROST Relays**
+are separate settings. A working NIP-46 bunker still requires at least
+the threshold number of FROST participants online to sign with a
+distributed identity.
+
+If bunker activation fails, check that a public `wss://` relay has been
+added in **Bunker Relays**, wait for the relay configuration to finish
+saving, and then enable the bunker. The 0.2.6 overlay avoids the
+previous save-before-start race and makes unexpected engine termination
+visible. It retries an unexpectedly terminated engine a bounded number
+of times, re-reading the saved bunker relay list. It does **not** infer
+relay connectivity merely from an enabled toggle.
+
+If the bunker is running but distributed signatures time out, check
+**FROST Relays** separately and confirm that enough participants are
+reachable and have matching shares for the same group. Do not rotate
+shares or delete the app as a troubleshooting shortcut.
+
+### APK update safety
+
+Existing CI-produced APKs are signed with an ephemeral Android debug
+certificate. A newly compiled debug APK may not install over the
+previous one because their signing certificates differ. **Do not
+uninstall an existing signer app unless all FROST shares are backed up,
+verified and recoverable.** New debug APKs are CI artifacts for a
+separate test device/profile only. Stable owner-controlled APK signing
+must be configured before issuing in-place app updates or publishing
+a replacement GitHub release.
+
 ## Status
 
 Prototype / test software. Do not treat this as a completed third-party security audit.
