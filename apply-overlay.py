@@ -1076,6 +1076,25 @@ connections_strings.write_text(cs, encoding="utf-8")
 
 
 
+# FROSTFED_SHARE_ANIMATED_QR_FORMAT_030
+# Keep's Android helper historically accepted only bech32 even though current
+# share exports use to_text(), which falls back to JSON for larger groups.
+# Use ShareExport::parse so both compact kshare1 and JSON exports can be split
+# into animated QR frames without dropping verification metadata.
+keep_mobile_rs = root / "keep" / "keep-mobile" / "src" / "lib.rs"
+km = keep_mobile_rs.read_text(encoding="utf-8")
+animated_old = """    let export = keep_core::frost::ShareExport::from_bech32(&bech32_data)
+        .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+"""
+animated_new = """    let export = keep_core::frost::ShareExport::parse(&bech32_data)
+        .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+"""
+if km.count(animated_old) != 1:
+    raise SystemExit("KeepMobile animated-share parse anchor missing")
+km = km.replace(animated_old, animated_new, 1)
+keep_mobile_rs.write_text(km, encoding="utf-8")
+
+
 # Expose proactive FROST share refresh to Android. This requires the COMPLETE
 # current share set and preserves the group public key/npub while replacing all
 # signing shares. It is intentionally an offline trusted-device operation.
