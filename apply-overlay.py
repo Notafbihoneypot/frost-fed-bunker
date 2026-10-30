@@ -1309,9 +1309,10 @@ crash_method = r'''    private fun installCrashCapture() {
                     appendLine("timestamp=" + java.time.Instant.now().toString())
                     appendLine("thread=" + thread.name)
                     appendLine("exception=" + throwable::class.java.name)
-                    appendLine("message=" + (throwable.message ?: ""))
                     appendLine()
-                    appendLine(throwable.stackTraceToString())
+                    throwable.stackTrace.take(256).forEach { frame ->
+                        appendLine("at " + frame.toString())
+                    }
                 }
                 crashFile.writeText(report, Charsets.UTF_8)
             }
