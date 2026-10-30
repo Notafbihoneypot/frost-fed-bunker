@@ -2029,6 +2029,70 @@ ms = ms.replace(
 main_strings.write_text(ms, encoding="utf-8")
 
 
+# FROSTFED_BUNKER_ROTATION_CLIENT_STATE_030
+# Rotating the bunker transport/connect credentials invalidates the previous URL
+# and its grant scope, so existing clients must re-pair. Upstream intentionally
+# keeps the display-oriented authorized_clients list in the config; clear that
+# stale list best-effort after a successful rotation so the UI does not claim
+# old clients remain authorized.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+rotate_clients_old = """        internal suspend fun rotateBunkerCredentials(keepMobile: io.privkey.keep.uniffi.KeepMobile) {
+            current()?.takeIf { it.serving }?.let { return it.rotateBunkerUrl() }
+            BunkerHandler(keepMobile).use { it.rotateBunkerCredentials() }
+            // A service that began starting meanwhile was stopped by the rotation.
+            current()?.restartIfServing()
+        }
+"""
+rotate_clients_new = """        internal suspend fun rotateBunkerCredentials(keepMobile: io.privkey.keep.uniffi.KeepMobile) {
+            val service = current()?.takeIf { it.serving }
+            if (service != null) {
+                service.rotateBunkerUrl()
+            } else {
+                BunkerHandler(keepMobile).use { it.rotateBunkerCredentials() }
+            }
+
+            // The transport key changed, so grants from the old scope are not
+            // restored. Clear the display/config client list too so the UI does
+            // not imply that those clients remain paired.
+            runCatching {
+                BunkerConfigStore.update(keepMobile) { config ->
+                    BunkerConfigInfo(config.enabled, emptyList())
+                }
+            }.onFailure {
+                if (BuildConfig.DEBUG) {
+                    Log.w(TAG, "Rotated bunker credentials but could not clear stale client list: ${it::class.simpleName}")
+                }
+            }
+            current()?.authorizedClientsCache?.clear()
+
+            // A service that began starting meanwhile was stopped by the
+            // rotation. The serving path already starts itself with the new URL.
+            if (service == null) current()?.restartIfServing()
+        }
+"""
+if bs.count(rotate_clients_old) != 1:
+    raise SystemExit("BunkerService rotation client-state anchor missing")
+bs = bs.replace(rotate_clients_old, rotate_clients_new, 1)
+bunker_service.write_text(bs, encoding="utf-8")
+
+bunker_screen = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerScreen.kt"
+screen = bunker_screen.read_text(encoding="utf-8")
+rotate_ui_old = """                    }.onSuccess {
+                        Toast.makeText(context, toastUrlRotated, Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+"""
+rotate_ui_new = """                    }.onSuccess {
+                        authorizedClients = emptySet()
+                        Toast.makeText(context, toastUrlRotated, Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+"""
+if screen.count(rotate_ui_old) != 1:
+    raise SystemExit("BunkerScreen rotation UI state anchor missing")
+screen = screen.replace(rotate_ui_old, rotate_ui_new, 1)
+bunker_screen.write_text(screen, encoding="utf-8")
+
+
 # FROSTFED_BUNKER_RELAY_REFRESH_030
 # Relay edits made while the bunker is live must not leave the running handler,
 # or the network reconnect callback, pinned to the old relay list. Expose only
