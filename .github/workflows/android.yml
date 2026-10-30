@@ -75,6 +75,13 @@ jobs:
           grep -q 'Export encrypted FROST share backup' upstream-keep-android/app/src/main/res/values/strings_main.xml
           grep -q 'Rotate / refresh existing FROST shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
           grep -q 'frost_refresh_exports' upstream-keep-android/keep/keep-mobile/src/lib.rs
+          grep -q 'Save this rotated share' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'one passphrase per line' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'refresh_shares requires the full set' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
+          grep -q 'checked_draw' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
+          grep -q 'refreshed share does not match its published verifying share' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
+          grep -q 'BunkerService.rotateBunkerCredentials(keepMobile)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+          ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
           grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'BackHandler(enabled = hasTransientScreen)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
