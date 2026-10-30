@@ -81,6 +81,8 @@ jobs:
           grep -q 'checked_draw' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
           grep -q 'refreshed share does not match its published verifying share' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
           grep -q 'BunkerService.rotateBunkerCredentials(keepMobile)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+          grep -q 'BunkerConfigInfo(config.enabled, emptyList())' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'authorizedClients = emptySet()' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'awaitStartSettled(handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'MAX_START_RETRIES' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
