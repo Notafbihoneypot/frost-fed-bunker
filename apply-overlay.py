@@ -2051,6 +2051,29 @@ relay_restart_replacement = """        internal fun restartAfterNodeDrop() {
 if relay_restart_anchor not in bs:
     raise SystemExit("BunkerService relay-restart anchor missing")
 bs = bs.replace(relay_restart_anchor, relay_restart_replacement, 1)
+
+# Upstream's connectivity callback captures the relay list read when the service
+# first starts. If the user edits bunker relays later, a future network change
+# would otherwise reconnect to that stale list. Re-read persisted bunker relays
+# at the moment of reconnect while leaving upstream's start/retry machinery intact.
+network_reconnect_old = """                if (shouldRestart) startBunker(keepMobile, relays)
+"""
+network_reconnect_new = """                if (shouldRestart) {
+                    val latestRelays = runCatching {
+                        keepMobile.getRelayConfig(null).bunkerRelays
+                    }.getOrDefault(emptyList())
+                    if (latestRelays.isNotEmpty()) {
+                        startBunker(keepMobile, latestRelays)
+                    } else {
+                        _bunkerUrl.value = null
+                        _status.value = BunkerStatus.ERROR
+                    }
+                }
+"""
+if bs.count(network_reconnect_old) != 1:
+    raise SystemExit("BunkerService stale network-relay callback anchor missing")
+bs = bs.replace(network_reconnect_old, network_reconnect_new, 1)
+
 bunker_service.write_text(bs, encoding="utf-8")
 
 
