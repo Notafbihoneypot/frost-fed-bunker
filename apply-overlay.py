@@ -2121,7 +2121,7 @@ rotate_clients_new = """        internal suspend fun rotateBunkerCredentials(kee
             // not imply that those clients remain paired.
             runCatching {
                 BunkerConfigStore.update(keepMobile) { config ->
-                    BunkerConfigInfo(config.enabled, emptyList())
+                    io.privkey.keep.uniffi.BunkerConfigInfo(config.enabled, emptyList())
                 }
             }.onFailure {
                 if (BuildConfig.DEBUG) {
