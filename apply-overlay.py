@@ -2028,6 +2028,32 @@ ms = ms.replace(
 main_strings.write_text(ms, encoding="utf-8")
 
 
+# FROSTFED_BUNKER_RELAY_REFRESH_030
+# Relay edits made while the bunker is live must not leave the running handler,
+# or the network reconnect callback, pinned to the old relay list. Expose only
+# a narrow wrapper around upstream's own mutex/retry restart path.
+bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
+bs = bunker_service.read_text(encoding="utf-8")
+relay_restart_anchor = """        internal fun restartAfterNodeDrop() {
+            current()?.restartIfServing()
+        }
+
+"""
+relay_restart_replacement = """        internal fun restartAfterNodeDrop() {
+            current()?.restartIfServing()
+        }
+
+        internal fun restartAfterRelayConfigChange() {
+            current()?.restartIfServing()
+        }
+
+"""
+if relay_restart_anchor not in bs:
+    raise SystemExit("BunkerService relay-restart anchor missing")
+bs = bs.replace(relay_restart_anchor, relay_restart_replacement, 1)
+bunker_service.write_text(bs, encoding="utf-8")
+
+
 # FROSTFED_BUNKER_RELAY_RECOVERY_026
 # Make the UI wait until the relay configuration has been committed before
 # allowing bunker startup. Previously a user could press Enable immediately
@@ -2057,9 +2083,19 @@ save_new = """    fun saveBunkerRelays(updated: List<String>) {
                     keepMobile.saveRelayConfig(
                         null, RelayConfigInfo(config.frostRelays, config.profileRelays, updated)
                     )
+                    if (updated.isEmpty() && isEnabled) {
+                        BunkerConfigStore.update(keepMobile) { current ->
+                            BunkerConfigInfo(false, current.authorizedClients)
+                        }
+                    }
                 }
                 // Only show persisted relays as available for bunker startup.
                 relays = updated
+                if (updated.isEmpty() && isEnabled) {
+                    onToggleBunker(false)
+                } else if (isEnabled) {
+                    BunkerService.restartAfterRelayConfigChange()
+                }
             } catch (e: Exception) {
                 Toast.makeText(context, toastSaveRelayFailed, Toast.LENGTH_SHORT).show()
             } finally {
