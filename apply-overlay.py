@@ -363,7 +363,7 @@ private fun OfflineRefreshMode(
     }
 
     StatusCard(
-        text = "Offline share refresh keeps the same npub but replaces every FROST share. You must provide the COMPLETE current share set. Do this only on a trusted offline device.",
+        text = "Offline share refresh keeps the same npub but replaces every FROST share. You must provide the COMPLETE current share set. Do this only on a trusted offline device. This does not revoke a full old signing threshold already compromised; in that case create a new FROST identity/npub.",
         containerColor = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer
     )
