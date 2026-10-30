@@ -90,6 +90,8 @@ jobs:
           grep -q 'BunkerConfigInfo(false, current.authorizedClients)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
+          ! grep -q 'throwable.message' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
+          ! grep -q 'stackTraceToString' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
           grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'BackHandler(enabled = hasTransientScreen)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'showShareRotationScreen' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
