@@ -10,7 +10,7 @@ on:
       - '.github/workflows/android.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frost-fed-bunker-android-${{ github.ref }}
