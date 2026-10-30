@@ -91,6 +91,7 @@ jobs:
           grep -q 'showShareRotationScreen' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'Rotate FROST Shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'fun FrostShareRotationScreen' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'setSecureScreen(context, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
           grep -q 'CreateDocument("text/plain")' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
           grep -q 'Save encrypted share to file' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
           grep -q 'documentPickerActive' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
