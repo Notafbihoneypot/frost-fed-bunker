@@ -84,6 +84,8 @@ jobs:
           grep -q 'awaitStartSettled(handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'MAX_START_RETRIES' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+          grep -q 'restartAfterRelayConfigChange' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'BunkerConfigInfo(false, current.authorizedClients)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
           grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
