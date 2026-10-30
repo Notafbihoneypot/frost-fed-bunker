@@ -224,23 +224,52 @@ private fun OfflineRefreshMode(
 ) {
     val scope = rememberCoroutineScope()
     var sharesText by remember { mutableStateOf("") }
-    val oldPassphrase = remember { SecurePassphrase() }
+    val context = LocalContext.current
     val newPassphrase = remember { SecurePassphrase() }
     val confirmPassphrase = remember { SecurePassphrase() }
-    var oldPassphraseDisplay by remember { mutableStateOf("") }
+    var oldPassphrasesDisplay by remember { mutableStateOf("") }
     var newPassphraseDisplay by remember { mutableStateOf("") }
     var confirmPassphraseDisplay by remember { mutableStateOf("") }
     var rotating by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<FrostGenerationResult?>(null) }
     var selectedShare by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
+    var pendingSaveData by remember { mutableStateOf<String?>(null) }
+
+    val saveRotatedShare = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val data = pendingSaveData
+        pendingSaveData = null
+        if (uri != null && !data.isNullOrEmpty()) {
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri, "wt")
+                            ?.bufferedWriter(Charsets.UTF_8)
+                            ?.use { writer ->
+                                writer.write(data)
+                                writer.newLine()
+                            }
+                            ?: error("Unable to open selected document")
+                    }.isSuccess
+                }
+                Toast.makeText(
+                    context,
+                    if (saved) "Rotated FROST share saved" else "Failed to save rotated FROST share",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose {
-            oldPassphrase.clear()
             newPassphrase.clear()
             confirmPassphrase.clear()
+            oldPassphrasesDisplay = ""
             sharesText = ""
+            pendingSaveData = null
             result = null
         }
     }
@@ -284,6 +313,19 @@ private fun OfflineRefreshMode(
                 data = share.exportData,
                 label = "Rotated FROST share " + share.shareIndex
             )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = {
+                pendingSaveData = share.exportData
+                saveRotatedShare.launch(
+                    "Frost-Fed-Bunker-rotated-share-" + share.shareIndex + ".kshare"
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Save this rotated share")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -338,15 +380,18 @@ private fun OfflineRefreshMode(
     Spacer(modifier = Modifier.height(12.dp))
 
     OutlinedTextField(
-        value = oldPassphraseDisplay,
+        value = oldPassphrasesDisplay,
         onValueChange = {
-            oldPassphrase.update(it)
-            oldPassphraseDisplay = it
+            oldPassphrasesDisplay = it
             error = null
         },
-        label = { Text("Current share passphrase") },
+        label = { Text("Current share passphrase(s)") },
+        supportingText = {
+            Text("Enter one passphrase to use for every share, or one passphrase per line in the same order as the shares.")
+        },
         visualTransformation = PasswordVisualTransformation(),
-        singleLine = true,
+        minLines = 1,
+        maxLines = 8,
         modifier = Modifier.fillMaxWidth()
     )
 
@@ -394,13 +439,23 @@ private fun OfflineRefreshMode(
     Button(
         onClick = {
             val shares = splitNonBlankLines(sharesText)
+            val enteredPassphrases = oldPassphrasesDisplay.lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            val currentPassphrases = when {
+                enteredPassphrases.size == 1 -> List(shares.size) { enteredPassphrases.first() }
+                enteredPassphrases.size == shares.size -> enteredPassphrases
+                else -> emptyList()
+            }
             when {
                 shares.size < 2 -> error = "Provide the complete FROST share set"
-                oldPassphrase.length == 0 -> error = "Current passphrase is required"
+                enteredPassphrases.isEmpty() -> error = "Current passphrase is required"
+                currentPassphrases.size != shares.size ->
+                    error = "Enter one current passphrase for all shares, or exactly one passphrase per share"
                 newPassphrase.length < 15 -> error = "Use a new passphrase of at least 15 characters"
                 !newPassphrase.contentEquals(confirmPassphrase) -> error = "New passphrases do not match"
                 else -> {
-                    val oldChars = oldPassphrase.toCharArray()
+                    val oldChars = currentPassphrases.map { it.toCharArray() }
                     val newChars = newPassphrase.toCharArray()
                     rotating = true
                     scope.launch {
@@ -408,7 +463,7 @@ private fun OfflineRefreshMode(
                             val refreshedResult = withContext(Dispatchers.Default) {
                                 keepMobile.frostRefreshExports(
                                     shares,
-                                    List(shares.size) { String(oldChars) },
+                                    oldChars.map { String(it) },
                                     "Refreshed FROST",
                                     String(newChars)
                                 )
@@ -416,10 +471,9 @@ private fun OfflineRefreshMode(
                             result = refreshedResult
                             selectedShare = 0
                             sharesText = ""
-                            oldPassphrase.clear()
+                            oldPassphrasesDisplay = ""
                             newPassphrase.clear()
                             confirmPassphrase.clear()
-                            oldPassphraseDisplay = ""
                             newPassphraseDisplay = ""
                             confirmPassphraseDisplay = ""
                         } catch (e: Exception) {
@@ -428,7 +482,7 @@ private fun OfflineRefreshMode(
                             }
                             error = "FROST share rotation failed. Verify that every current share and passphrase is correct."
                         } finally {
-                            Arrays.fill(oldChars, '\u0000')
+                            oldChars.forEach { Arrays.fill(it, '\u0000') }
                             Arrays.fill(newChars, '\u0000')
                             rotating = false
                         }
