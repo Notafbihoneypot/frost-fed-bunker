@@ -443,7 +443,6 @@ private fun OfflineRefreshMode(
         onClick = {
             val shares = splitNonBlankLines(sharesText)
             val enteredPassphrases = oldPassphrasesDisplay.lines()
-                .map { it.trim() }
                 .filter { it.isNotEmpty() }
             val currentPassphrases = when {
                 enteredPassphrases.size == 1 -> List(shares.size) { enteredPassphrases.first() }
