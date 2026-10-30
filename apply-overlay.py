@@ -117,6 +117,9 @@ cg = cg.replace(
     "import androidx.compose.ui.text.font.FontFamily\n",
     "import androidx.compose.ui.text.font.FontFamily\n"
     "import androidx.compose.ui.text.input.PasswordVisualTransformation\n"
+    "import androidx.activity.compose.rememberLauncherForActivityResult\n"
+    "import androidx.activity.result.contract.ActivityResultContracts\n"
+    "import android.widget.Toast\n"
     "import androidx.compose.foundation.text.KeyboardOptions\n"
     "import androidx.compose.ui.text.input.KeyboardType\n"
     "import io.privkey.keep.uniffi.FrostGenerationResult\n"
