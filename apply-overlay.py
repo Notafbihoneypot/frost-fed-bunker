@@ -14,7 +14,7 @@ root = pathlib.Path(sys.argv[1]).resolve()
 if not (root / "app" / "build.gradle.kts").is_file():
     raise SystemExit(f"not a Keep Android checkout: {root}")
 
-EXPECTED_KEEP = "d9192f5801949700dbefff2c9634b0fe904edf9e"
+EXPECTED_KEEP = "2ebfed2086688ab880ff0f58bb8f7c7dd3acaf9e"
 actual_keep = (root / "keep.version").read_text(encoding="utf-8").strip()
 if actual_keep != EXPECTED_KEEP:
     raise SystemExit(f"unexpected keep.version: {actual_keep}; expected {EXPECTED_KEEP}")
@@ -30,8 +30,8 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.frostfedbunker"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 8')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.2.6-frostr"')
+replace_once(gradle, 'versionCode = 31', 'versionCode = 9')
+replace_once(gradle, 'versionName = "1.3.2"', 'versionName = "0.3.0-frostr"')
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
