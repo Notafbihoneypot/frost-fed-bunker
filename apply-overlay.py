@@ -1216,6 +1216,13 @@ if receiver_xml.strip() not in mt:
         receiver_xml + "        <service\n            android:name=\".nip46.BunkerService\"",
         1,
     )
+# This overlay deliberately removes full-screen approval notifications, so do
+# not retain the alarm/call-style permission from upstream.
+mt = mt.replace(
+    '    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />\n',
+    '',
+    1,
+)
 manifest.write_text(mt, encoding="utf-8")
 
 bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
