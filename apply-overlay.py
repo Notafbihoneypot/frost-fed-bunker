@@ -963,10 +963,12 @@ ma = ma.replace(
     1,
 )
 oncreate_anchor = """        super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) approverRequested = intent?.action == ApproverNotifier.ACTION_SHOW_APPROVER
 
         val app = application as? KeepMobileApp ?: run { finish(); return }
 """
 oncreate_replacement = """        super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) approverRequested = intent?.action == ApproverNotifier.ACTION_SHOW_APPROVER
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
