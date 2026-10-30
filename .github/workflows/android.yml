@@ -70,6 +70,7 @@ jobs:
           grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'getRelayConfig(null).bunkerRelays' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           ! grep -q 'setFullScreenIntent(contentIntent, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          ! grep -q 'android.permission.USE_FULL_SCREEN_INTENT' upstream-keep-android/app/src/main/AndroidManifest.xml
           grep -q 'Rotate NIP-46 connection keys' upstream-keep-android/app/src/main/res/values/strings_connections.xml
           grep -q 'Export encrypted FROST share backup' upstream-keep-android/app/src/main/res/values/strings_main.xml
           grep -q 'Rotate / refresh existing FROST shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
