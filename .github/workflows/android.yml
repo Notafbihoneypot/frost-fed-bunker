@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KEEP_ANDROID_SHA: f0db28aa218f18b71be60e3b1cf39eb51705e791
-  KEEP_CORE_SHA: d9192f5801949700dbefff2c9634b0fe904edf9e
+  KEEP_ANDROID_SHA: 50c70f2cbe67eac7e289e4950625f34f2c038fc1
+  KEEP_CORE_SHA: 2ebfed2086688ab880ff0f58bb8f7c7dd3acaf9e
   ANDROID_HOME: /usr/local/lib/android/sdk
   NDK_VERSION: "29.0.14206865"
   CARGO_NDK_VERSION: "4.1.2"
@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId = "org.glowstr.frostfedbunker"' upstream-keep-android/app/build.gradle.kts
-          grep -q 'versionName = "0.2.6-frostr"' upstream-keep-android/app/build.gradle.kts
+          grep -q 'versionName = "0.3.0-frostr"' upstream-keep-android/app/build.gradle.kts
           grep -q 'Manifest.permission.POST_NOTIFICATIONS' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'while (bunkerHandler === handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
@@ -133,18 +133,18 @@ jobs:
           mapfile -t APKS < <(find app/build/outputs/apk/debug -type f -name '*.apk' | sort)
           printf 'Built APKs:\n%s\n' "${APKS[*]}"
           test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk" || \
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk.sha256"
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk" || \
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk"
+          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk.sha256"
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Frost-Fed-Bunker-Android-ARM64
           path: |
-            dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk
-            dist/Frost-Fed-Bunker-0.2.6-frostr-arm64.apk.sha256
+            dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk
+            dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
