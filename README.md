@@ -92,6 +92,8 @@ Importing an nsec does **not** convert that account into a FROST group or split 
 
 A distributed FROST signature requires enough participants to communicate. If one public relay fails, configure multiple relays for redundancy.
 
+FROST coordination relays and NIP-46 **Bunker Relays** are separate. In 0.3.0, changing the Bunker Relay list while the bunker is running restarts the live bunker through the upstream start/retry state machine so the newly persisted list is actually used. Removing the final Bunker Relay disables/stops the bunker instead of allowing an old connection to keep serving silently.
+
 The current upstream transport is relay/network based. A fully disconnected FROST signing flow would require a separate local/air-gap transport (for example LAN or multi-round animated QR); that is not claimed as implemented here.
 
 ## Android build
