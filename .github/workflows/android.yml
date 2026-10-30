@@ -68,7 +68,6 @@ jobs:
           grep -q 'versionName = "0.3.0-frostr"' upstream-keep-android/app/build.gradle.kts
           grep -q 'Manifest.permission.POST_NOTIFICATIONS' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'while (bunkerHandler === handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'getRelayConfig(null).bunkerRelays' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           ! grep -q 'setFullScreenIntent(contentIntent, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'Rotate NIP-46 connection keys' upstream-keep-android/app/src/main/res/values/strings_connections.xml
@@ -81,6 +80,9 @@ jobs:
           grep -q 'checked_draw' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
           grep -q 'refreshed share does not match its published verifying share' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
           grep -q 'BunkerService.rotateBunkerCredentials(keepMobile)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+          grep -q 'awaitStartSettled(handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'MAX_START_RETRIES' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
           grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
@@ -96,7 +98,6 @@ jobs:
           grep -q 'clearPrimaryClip()' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
           grep -q 'isValidNsecFormat(pasted)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
           grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          grep -q 'recoveryAttempts' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
 
       - name: Set up JDK 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
