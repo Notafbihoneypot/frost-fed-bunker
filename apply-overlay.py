@@ -1154,7 +1154,52 @@ refresh_method = r'''    /// Refresh an existing complete FROST share set offlin
             }
         }
 
-        let (refreshed, _) = keep_core::frost::refresh_shares(&shares)
+        // Older compact kshare1 backups can omit the full public-key
+        // package and restore each member with only its own verifying share.
+        // We have the complete share set here, so rebuild the canonical
+        // verifying-share map from the authenticated key packages and make
+        // every member prove that map lies on the same threshold polynomial.
+        // This both preserves compatibility with 0.2.x backups and avoids
+        // feeding a single-entry public package into refresh_shares().
+        let mut verifying_shares = std::collections::BTreeMap::new();
+        for share in &shares {
+            let key_package = share
+                .key_package()
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            let bytes = key_package
+                .verifying_share()
+                .serialize()
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            let bytes: [u8; 33] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| KeepMobileError::InvalidShare {
+                    msg: "Invalid FROST verifying-share length".into(),
+                })?;
+            verifying_shares.insert(share.metadata.identifier, bytes);
+        }
+
+        let mut normalized = Vec::with_capacity(shares.len());
+        for share in &shares {
+            let public_package = keep_core::frost::complete_verifying_shares(
+                share,
+                &verifying_shares,
+            )
+            .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            let key_package = share
+                .key_package()
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+            normalized.push(
+                SharePackage::new(
+                    share.metadata.clone(),
+                    &key_package,
+                    &public_package,
+                )
+                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?,
+            );
+        }
+
+        let (refreshed, _) = keep_core::frost::refresh_shares(&normalized)
             .map_err(|e| KeepMobileError::FrostError { msg: e.to_string() })?;
 
         if refreshed.iter().any(|s| s.metadata.group_pubkey != group_pubkey) {
