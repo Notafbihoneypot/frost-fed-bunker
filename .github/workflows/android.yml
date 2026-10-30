@@ -85,6 +85,8 @@ jobs:
           grep -q 'MAX_START_RETRIES' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'restartAfterRelayConfigChange' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'val latestRelays = runCatching' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'startBunker(keepMobile, latestRelays)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'BunkerConfigInfo(false, current.authorizedClients)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
           grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
