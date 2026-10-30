@@ -1573,6 +1573,12 @@ fun FrostShareRotationScreen(
     keepMobile: KeepMobile,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    DisposableEffect(context) {
+        setSecureScreen(context, true)
+        onDispose { setSecureScreen(context, false) }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
