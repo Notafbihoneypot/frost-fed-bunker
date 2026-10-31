@@ -1,0 +1,92 @@
+name: Publish FROSTR 0.3.1 encrypted share export test release
+
+on:
+  push:
+    branches: [main-frostr]
+    paths:
+      - '.github/workflows/publish-frostr-share-export-preview.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    if: github.repository == 'Notafbihoneypot/frost-fed-bunker'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Notafbihoneypot/frost-fed-bunker
+      SOURCE_RUN: "41224235112"
+      SOURCE_SHA: "6058fd0ddec10f0cd2ee9039266cc58a2e9c29f6"
+      RELEASE_TAG: "v0.3.1-frostr-share-export-test"
+      APK: "Frost-Fed-Bunker-0.3.1-frostr-arm64.apk"
+
+    steps:
+      - name: Require successful Android compilation for exactly the released source
+        run: |
+          set -euo pipefail
+          run_status="$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq '.status')"
+          run_result="$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq '.conclusion')"
+          run_commit="$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq '.head_sha')"
+          test "$run_status" = completed
+          test "$run_result" = success
+          test "$run_commit" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/main-frostr" --jq '.object.sha')" != ""
+          echo "Publishing verified APK built from $SOURCE_SHA in GitHub Actions run $SOURCE_RUN"
+
+      - name: Download exactly the validated CI artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download "$SOURCE_RUN" --repo "$GH_REPO" --name "Frost-Fed-Bunker-Android-ARM64" --dir dist
+          test -s "dist/$APK"
+          test -s "dist/$APK.sha256"
+          expected="$(awk 'NR==1 {print $1}' "dist/$APK.sha256")"
+          [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]]
+          printf '%s  %s\n' "$expected" "dist/$APK" | sha256sum --check --status
+          echo "Verified SHA-256: $expected"
+
+      - name: Create distinct, clearly warned prerelease without replacing earlier releases
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists. Refusing to overwrite."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          # FROSTR 0.3.1 — encrypted share file export (TEST ONLY)
+
+          **Important: This is a test release, NOT a supported in-place upgrade.**
+          GitHub CI signed this APK with a temporary Android debug signing certificate.
+          Its signature may differ from the signature of your currently installed app.
+          **Do not uninstall an existing Frost Fed Bunker installation just to install this
+          preview. Uninstalling removes the app's private storage and can permanently
+          destroy FROST shares or prevent you from using your original npub.**
+          Install only in a disposable Android test profile/device until stable
+          owner-controlled signing and a tested migration/recovery procedure are available.
+
+          Changes:
+          - Save every newly generated offline encrypted FROST share to a user-selected
+            `.kshare` file using the Android system Save As picker.
+          - Preserve file export of existing signer shares and refreshed/rotated shares.
+          - Use export-passphrase-encrypted share payloads. No storage-wide permission,
+            automatic cloud upload, new Nostr identity, or signing key rotation is required.
+          - Instructions and recovery/security warnings in the README.
+
+          The APK and SHA-256 manifest are taken unchanged from the successful GitHub Actions
+          Android build (run 41224235112; source commit
+          `6058fd0ddec10f0cd2ee9039266cc58a2e9c29f6`).
+          The build verified the APK signature, but this software has not undergone an
+          independent security audit. Save backups in separate trusted offline locations;
+          never store the export passphrase beside the shares.
+          NOTES
+          gh release create "$RELEASE_TAG" "dist/$APK" "dist/$APK.sha256" \
+            --repo "$GH_REPO" \
+            --target "$SOURCE_SHA" \
+            --title "Frost Fed Bunker 0.3.1 — encrypted share export (TEST)" \
+            --notes-file release-notes.md \
+            --prerelease
+          gh release view "$RELEASE_TAG" --repo "$GH_REPO" --json url,assets,isPrerelease \
+            --jq '{url: .url, isPrerelease: .isPrerelease, assets: [.assets[].name]}'
