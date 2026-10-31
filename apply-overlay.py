@@ -521,6 +521,7 @@ private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
 @Composable
 private fun OfflineGroupMode(keepMobile: KeepMobile) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val passphrase = remember { SecurePassphrase() }
     val confirmPassphrase = remember { SecurePassphrase() }
     var passphraseDisplay by remember { mutableStateOf("") }
@@ -535,6 +536,36 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var refreshMode by remember { mutableStateOf(false) }
 
+    // Generated exports are passphrase-encrypted by the FROST core.
+    // Use Android's user-selected document destination; never silently save key material.
+    var pendingGeneratedShare by remember { mutableStateOf<String?>(null) }
+    val saveGeneratedShare = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        val data = pendingGeneratedShare
+        pendingGeneratedShare = null
+        if (uri != null && !data.isNullOrEmpty()) {
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri, "wt")
+                            ?.bufferedWriter(Charsets.UTF_8)
+                            ?.use { writer ->
+                                writer.write(data)
+                                writer.newLine()
+                            }
+                            ?: error("Unable to open selected document")
+                    }.isSuccess
+                }
+                Toast.makeText(
+                    context,
+                    if (saved) "Encrypted FROST share saved" else "Failed to save encrypted FROST share",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
     if (refreshMode) {
         OfflineRefreshMode(keepMobile = keepMobile, onBack = { refreshMode = false })
         return
@@ -546,6 +577,7 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
             confirmPassphrase.clear()
             passphraseDisplay = ""
             confirmPassphraseDisplay = ""
+            pendingGeneratedShare = null
             generationResult = null
         }
     }
@@ -601,6 +633,24 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
             )
         }
 
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = {
+                pendingGeneratedShare = share.exportData
+                saveGeneratedShare.launch(
+                    "Frost-Fed-Bunker-generated-share-" + share.shareIndex + ".kshare"
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Save this encrypted share")
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Save each share separately to trusted offline storage; avoid cloud folders. Verify your backup before finishing.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             stringResource(R.string.igloo_offline_transfer_hint),
