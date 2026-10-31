@@ -92,7 +92,7 @@ Importing an nsec does **not** convert that account into a FROST group or split 
 
 A distributed FROST signature requires enough participants to communicate. If one public relay fails, configure multiple relays for redundancy.
 
-FROST coordination relays and NIP-46 **Bunker Relays** are separate. In 0.3.0, changing the Bunker Relay list while the bunker is running restarts the live bunker through the upstream start/retry state machine so the newly persisted list is actually used. Removing the final Bunker Relay disables/stops the bunker instead of allowing an old connection to keep serving silently.
+FROST coordination relays and NIP-46 **Bunker Relays** are separate. In 0.3.1, changing the Bunker Relay list while the bunker is running restarts the live bunker through the upstream start/retry state machine so the newly persisted list is actually used. Removing the final Bunker Relay disables/stops the bunker instead of allowing an old connection to keep serving silently.
 
 The current upstream transport is relay/network based. A fully disconnected FROST signing flow would require a separate local/air-gap transport (for example LAN or multi-round animated QR); that is not claimed as implemented here.
 
@@ -119,6 +119,18 @@ The current CI APK uses the GitHub runner's ephemeral Android debug certificate.
 Do not uninstall a signer containing your only FROST share just to install a new CI APK. Back up and verify shares first. Until stable owner-controlled APK signing is configured, CI APKs are intended for a separate test profile/device rather than production in-place upgrades.
 
 For that reason the workflow does not automatically publish each debug APK as a replacement GitHub Release asset.
+
+## Save encrypted shares to files (0.3.1 test build)
+
+Exporting and rotating shares happens in **Frost Fed Bunker**, not Glowstr.
+
+- **Existing signer share:** Account → **Export encrypted FROST share backup**. Authenticate, choose a new export passphrase, and select **Save encrypted share to file** in the export result.
+- **New offline identity:** Create Signing Group → Offline. After generating a 2-of-3 or 3-of-5 identity, choose **Save this encrypted share** under each QR code. Save each `.kshare` file, then tap **Next** and repeat for all shares.
+- **Rotated shares:** Account → **Rotate FROST Shares**. After a successful full-set refresh, verify the unchanged group npub and use **Save this rotated share** for every replacement share.
+
+These options use Android's system **Create Document** file picker and write only the FROST core's **passphrase-encrypted** share export. Choose a trusted offline destination rather than a cloud-syncing provider, separate storage locations for different shares, and verify recovery before deleting any original backup. Keep export passphrases separately.
+
+**Never uninstall a signer with unique FROST shares merely to install this preview.** Each CI run may use a different temporary Android signing key; the update could be rejected and uninstalling the old app deletes its protected storage. Use a separate test profile for the new build until a stable signing and migration path is provided.
 
 ## Share-format compatibility
 
