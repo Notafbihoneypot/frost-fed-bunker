@@ -2,6 +2,8 @@ name: Build Frost Fed Bunker Android
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main-frostr]
   push:
     branches: [main-frostr]
     paths:
@@ -65,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId = "org.glowstr.frostfedbunker"' upstream-keep-android/app/build.gradle.kts
-          grep -q 'versionName = "0.3.0-frostr"' upstream-keep-android/app/build.gradle.kts
+          grep -q 'versionName = "0.3.1-frostr"' upstream-keep-android/app/build.gradle.kts
           grep -q 'Manifest.permission.POST_NOTIFICATIONS' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
           grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
           grep -q 'getRelayConfig(null).bunkerRelays' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
@@ -76,6 +78,11 @@ jobs:
           grep -q 'Rotate / refresh existing FROST shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
           grep -q 'frost_refresh_exports' upstream-keep-android/keep/keep-mobile/src/lib.rs
           grep -q 'Save this rotated share' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'Save this encrypted share' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'Frost-Fed-Bunker-generated-share-' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'saveGeneratedShare.launch' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          grep -q 'Encrypted FROST share saved' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+          test "$(grep -c 'ActivityResultContracts.CreateDocument("text/plain")' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt)" -eq 2
           grep -q 'one passphrase per line' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
           grep -q 'refresh_shares requires the full set' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
           grep -q 'checked_draw' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
@@ -154,18 +161,18 @@ jobs:
           mapfile -t APKS < <(find app/build/outputs/apk/debug -type f -name '*.apk' | sort)
           printf 'Built APKs:\n%s\n' "${APKS[*]}"
           test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk" || \
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk.sha256"
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk" || \
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk"
+          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk.sha256"
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: Frost-Fed-Bunker-Android-ARM64
           path: |
-            dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk
-            dist/Frost-Fed-Bunker-0.3.0-frostr-arm64.apk.sha256
+            dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk
+            dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
