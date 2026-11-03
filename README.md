@@ -1,4 +1,4 @@
-# Frost Fed Bunker
+# Frost bunker
 
 Android FROST threshold signer and NIP-46 bunker for Glowstr/Nostr, built on the pinned Rust `keep` cryptographic core and Keep Android signer.
 
@@ -25,7 +25,7 @@ Distributed DKG is the preferred mode. Each signer generates its own contributio
 
 Typical 2-of-3 setup:
 
-1. Install Frost Fed Bunker / Igloo Mobile on three signer instances.
+1. Install Frost bunker on three signer instances.
 2. Configure the same secure `wss://` FROST relay.
 3. On the coordinator choose **Create FROST Identity**.
 4. Choose 2-of-3.
@@ -68,9 +68,9 @@ The GitHub Actions workflow:
 
 `.github/workflows/android.yml`
 
-clones the pinned upstream projects, applies `apply-overlay.py`, compiles the Rust core for ARM64 Android, builds the APK, verifies the APK signature, and publishes a direct GitHub prerelease asset.
+clones pinned upstream projects, applies `apply-overlay.py`, compiles the Rust core for ARM64 Android, builds an explicitly DEBUG-signed test APK and an UNSIGNED release APK, verifies the release is unsigned, and uploads them as separate CI artifacts. Debug test APKs are not production releases. Owner signing is performed in offline Qubes; see [OFFLINE-APK-SIGNING.md](OFFLINE-APK-SIGNING.md).
 
-Current test package ID:
+Stable Android package ID (unchanged for future updates):
 
 `org.glowstr.igloomobile`
 
