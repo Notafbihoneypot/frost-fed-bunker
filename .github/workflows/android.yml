@@ -1,4 +1,4 @@
-name: Build Frost Fed Bunker Android
+name: Build Frost bunker Android (unsigned release)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
       - '.github/workflows/android.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frost-fed-bunker-android-${{ github.ref }}
@@ -119,18 +119,35 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-      - name: Publish direct APK prerelease
+      # Pinned upstream defaults to debug-signed release when no keystore exists.
+      # The overlay disables that fallback. Private signing stays offline.
+      - name: Build unsigned release for offline signing
+        working-directory: upstream-keep-android
         env:
-          GH_TOKEN: ${{ github.token }}
+          KEEP_REPO: ${{ github.workspace }}/upstream-keep-android/keep
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+          TARGETS: aarch64-linux-android
         run: |
           set -euo pipefail
-          TAG="v0.1.0-test"
-          gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
-          gh release create "$TAG" \
-            dist/Frost-Fed-Bunker-0.1.0-test-arm64.apk \
-            dist/Frost-Fed-Bunker-0.1.0-test-arm64.apk.sha256 \
-            THIRD_PARTY_NOTICES.md \
-            --target "$GITHUB_SHA" \
-            --title "Frost Fed Bunker 0.1.0 Android Test" \
-            --notes "ARM64 Android test build using pinned Keep Android/Keep Rust. Supports distributed FROST DKG, advanced offline trusted-dealer share generation, encrypted share QR export/import, and NIP-46 bunker signing for Glowstr. Test software; not a completed third-party security audit." \
-            --prerelease
+          unset KEYSTORE_FILE KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
+          ./gradlew assembleRelease --no-daemon
+          mkdir -p "$GITHUB_WORKSPACE/unsigned"
+          mapfile -t APKS < <(find app/build/outputs/apk/release -type f -name '*-unsigned.apk' | sort)
+          test "${#APKS[@]}" -eq 1
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk"
+          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk"; then
+            echo "Refusing to distribute an already signed release APK" >&2
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk" | grep "package: name='org.glowstr.igloomobile'"
+          cd "$GITHUB_WORKSPACE/unsigned"
+          sha256sum Frost-bunker-0.1.1-arm64-unsigned.apk > Frost-bunker-0.1.1-arm64-unsigned.apk.sha256
+
+      - name: Upload UNSIGNED Frost bunker release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Frost-bunker-unsigned-release-arm64
+          path: unsigned/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
