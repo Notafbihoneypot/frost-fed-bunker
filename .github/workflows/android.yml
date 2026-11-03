@@ -140,6 +140,7 @@ jobs:
             exit 1
           fi
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk" | grep "package: name='org.glowstr.igloomobile'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk" | grep -F "application-label:'Frost bunker'"
           cd "$GITHUB_WORKSPACE/unsigned"
           sha256sum Frost-bunker-0.1.1-arm64-unsigned.apk > Frost-bunker-0.1.1-arm64-unsigned.apk.sha256
 
