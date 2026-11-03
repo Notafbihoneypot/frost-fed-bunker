@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Frost Fed Bunker Android overlay.
-"""Apply the minimal Igloo Mobile overlay to a pinned Keep Android checkout."""
+"""Apply the minimal Frost bunker overlay to a pinned Keep Android checkout."""
 
 from __future__ import annotations
 
@@ -30,8 +30,26 @@ def replace_once(path: pathlib.Path, old: str, new: str) -> None:
 
 gradle = root / "app" / "build.gradle.kts"
 replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.igloomobile"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 1')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.1.0-test"')
+replace_once(gradle, 'versionCode = 28', 'versionCode = 2')
+replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.1.1"')
+
+# The pinned upstream signs release builds with the DEBUG key by default.
+# For owner-held offline signing, release output MUST remain unsigned.
+# Fail if upstream changes this anchor rather than silently leaking a test APK.
+replace_once(
+    gradle,
+    '''            // findByName (not getByName) so the build still works when F-Droid
+            // strips the "release" signing config: fall back to debug signing.
+            val releaseConfig = signingConfigs.findByName("release")
+            signingConfig = if (releaseConfig?.storeFile != null) {
+                releaseConfig
+            } else {
+                signingConfigs.getByName("debug")
+            }''',
+    '''            // Owner signs unsigned release APK inside offline Qubes.
+            signingConfig = null''',
+)
+
 replace_once(
     gradle,
     'include("arm64-v8a", "x86_64")',
@@ -42,34 +60,34 @@ strings = root / "app" / "src" / "main" / "res" / "values" / "strings.xml"
 replace_once(
     strings,
     '<string name="app_name" translatable="false">Keep</string>',
-    '<string name="app_name" translatable="false">Igloo Mobile</string>',
+    '<string name="app_name" translatable="false">Frost bunker</string>',
 )
 replace_once(
     strings,
     '<string name="foreground_service_title" translatable="false">Keep</string>',
-    '<string name="foreground_service_title" translatable="false">Igloo Mobile</string>',
+    '<string name="foreground_service_title" translatable="false">Frost bunker</string>',
 )
 replace_once(
     strings,
     '<string name="bunker_service_title" translatable="false">Keep Bunker</string>',
-    '<string name="bunker_service_title" translatable="false">Igloo Mobile Bunker</string>',
+    '<string name="bunker_service_title" translatable="false">Frost bunker</string>',
 )
 replace_once(
     strings,
     '<string name="biometric_unlock_title" translatable="false">Keep</string>',
-    '<string name="biometric_unlock_title" translatable="false">Igloo Mobile</string>',
+    '<string name="biometric_unlock_title" translatable="false">Frost bunker</string>',
 )
 
 main_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_main.xml"
 replace_once(
     main_strings,
     '<string name="main_unlock_title">Unlock Keep</string>',
-    '<string name="main_unlock_title">Unlock Igloo Mobile</string>',
+    '<string name="main_unlock_title">Unlock Frost bunker</string>',
 )
 replace_once(
     main_strings,
     '<string name="main_home_title">Keep</string>',
-    '<string name="main_home_title">Igloo Mobile</string>',
+    '<string name="main_home_title">Frost bunker</string>',
 )
 replace_once(
     main_strings,
@@ -924,7 +942,7 @@ main_activity.write_text(ma, encoding="utf-8")
 share_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_share.xml"
 ss = share_strings.read_text(encoding="utf-8")
 offline_strings = """
-    <!-- Igloo Mobile advanced offline trusted-dealer setup -->
+    <!-- Frost bunker advanced offline trusted-dealer setup -->
     <string name="igloo_offline_tab">Offline</string>
     <string name="igloo_offline_warning">Advanced setup: this phone temporarily generates the complete threshold key material and every share. Use an offline, trusted device. Distributed setup is safer because no single device ever holds the whole key.</string>
     <string name="igloo_offline_passphrase">Share export passphrase</string>
@@ -1317,4 +1335,4 @@ bs = bunker_service.read_text(encoding="utf-8")
 bs = bs.replace("            .setFullScreenIntent(contentIntent, true)\n", "")
 bunker_service.write_text(bs, encoding="utf-8")
 
-print("Igloo Mobile overlay applied successfully")
+print("Frost bunker overlay applied successfully")
