@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # Frost Fed Bunker Android overlay.
-"""Apply the minimal Frost bunker overlay to a pinned Keep Android checkout."""
+"""Apply the minimal Frost bunker overlay to a pinned Keep Android checkout.
+
+Every edit is anchored to an exact snippet of the pinned upstream sources and
+must match exactly the expected number of times. All files are patched in
+memory first and only written once every anchor has matched, so a pin bump
+that moves an anchor fails loudly and leaves the checkout untouched instead of
+producing a partially patched (and possibly less safe) app.
+"""
 
 from __future__ import annotations
 
@@ -19,25 +26,61 @@ actual_keep = (root / "keep.version").read_text(encoding="utf-8").strip()
 if actual_keep != EXPECTED_KEEP:
     raise SystemExit(f"unexpected keep.version: {actual_keep}; expected {EXPECTED_KEEP}")
 
+UPSTREAM_ID = "io.privkey.keep"
+APP_ID = "org.glowstr.igloomobile"
+APP_NAME = "Frost bunker"
 
-def replace_once(path: pathlib.Path, old: str, new: str) -> None:
-    text = path.read_text(encoding="utf-8")
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected exactly one match for {old!r}, found {count}")
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+RES = ("app", "src", "main", "res", "values")
+KOTLIN = ("app", "src", "main", "kotlin", "io", "privkey", "keep")
 
 
-gradle = root / "app" / "build.gradle.kts"
-replace_once(gradle, 'applicationId = "io.privkey.keep"', 'applicationId = "org.glowstr.igloomobile"')
-replace_once(gradle, 'versionCode = 28', 'versionCode = 2')
-replace_once(gradle, 'versionName = "1.2.0"', 'versionName = "0.1.1"')
+class Source:
+    """One file of the checkout: read once, patched in memory, written once."""
+
+    _pending: list["Source"] = []
+
+    def __init__(self, *parts: str, create: bool = False) -> None:
+        self.path = root.joinpath(*parts)
+        if create:
+            if self.path.exists():
+                raise SystemExit(f"{self.path}: already exists; overlay applied twice?")
+            self.text = ""
+        else:
+            self.text = self.path.read_text(encoding="utf-8")
+        Source._pending.append(self)
+
+    def replace(self, old: str, new: str, *, count: int = 1) -> None:
+        found = self.text.count(old)
+        if found != count:
+            raise SystemExit(
+                f"{self.path}: expected {count} match(es) for {old!r}, found {found}"
+            )
+        self.text = self.text.replace(old, new)
+
+    def insert_before(self, anchor: str, addition: str) -> None:
+        self.replace(anchor, addition + anchor)
+
+    def insert_after(self, anchor: str, addition: str) -> None:
+        self.replace(anchor, anchor + addition)
+
+    @classmethod
+    def save_all(cls) -> None:
+        for source in cls._pending:
+            source.path.write_text(source.text, encoding="utf-8")
+        cls._pending.clear()
+
+
+# --- Gradle: package identity, version, unsigned release, ARM64 only ---------
+
+gradle = Source("app", "build.gradle.kts")
+gradle.replace(f'applicationId = "{UPSTREAM_ID}"', f'applicationId = "{APP_ID}"')
+gradle.replace('versionCode = 28', 'versionCode = 2')
+gradle.replace('versionName = "1.2.0"', 'versionName = "0.1.1"')
 
 # The pinned upstream signs release builds with the DEBUG key by default.
 # For owner-held offline signing, release output MUST remain unsigned.
 # Fail if upstream changes this anchor rather than silently leaking a test APK.
-replace_once(
-    gradle,
+gradle.replace(
     '''            // findByName (not getByName) so the build still works when F-Droid
             // strips the "release" signing config: fall back to debug signing.
             val releaseConfig = signingConfigs.findByName("release")
@@ -49,78 +92,119 @@ replace_once(
     '''            // Owner signs unsigned release APK inside offline Qubes.
             signingConfig = null''',
 )
-
-replace_once(
-    gradle,
-    'include("arm64-v8a", "x86_64")',
-    'include("arm64-v8a")',
-)
-
-strings = root / "app" / "src" / "main" / "res" / "values" / "strings.xml"
-replace_once(
-    strings,
-    '<string name="app_name" translatable="false">Keep</string>',
-    '<string name="app_name" translatable="false">Frost bunker</string>',
-)
-replace_once(
-    strings,
-    '<string name="foreground_service_title" translatable="false">Keep</string>',
-    '<string name="foreground_service_title" translatable="false">Frost bunker</string>',
-)
-replace_once(
-    strings,
-    '<string name="bunker_service_title" translatable="false">Keep Bunker</string>',
-    '<string name="bunker_service_title" translatable="false">Frost bunker</string>',
-)
-replace_once(
-    strings,
-    '<string name="biometric_unlock_title" translatable="false">Keep</string>',
-    '<string name="biometric_unlock_title" translatable="false">Frost bunker</string>',
-)
-
-main_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_main.xml"
-replace_once(
-    main_strings,
-    '<string name="main_unlock_title">Unlock Keep</string>',
-    '<string name="main_unlock_title">Unlock Frost bunker</string>',
-)
-replace_once(
-    main_strings,
-    '<string name="main_home_title">Keep</string>',
-    '<string name="main_home_title">Frost bunker</string>',
-)
-replace_once(
-    main_strings,
-    '<string name="main_create_group_title">Create Signing Group</string>',
-    '<string name="main_create_group_title">Create FROST Identity</string>',
-)
-replace_once(
-    main_strings,
-    '<string name="main_create_group_subtitle">Authenticate to store share securely</string>',
-    '<string name="main_create_group_subtitle">Create a threshold identity and store this device\\\'s share securely</string>',
-)
-replace_once(
-    main_strings,
-    '<string name="main_create_account_button">Create Account</string>',
-    '<string name="main_create_account_button">Create single-key account (advanced)</string>',
-)
-
-manifest = root / "app" / "src" / "main" / "AndroidManifest.xml"
-text = manifest.read_text(encoding="utf-8")
-old = 'android:authorities="io.privkey.keep.GET_PUBLIC_KEY;io.privkey.keep.SIGN_EVENT;io.privkey.keep.NIP04_ENCRYPT;io.privkey.keep.NIP04_DECRYPT;io.privkey.keep.NIP44_ENCRYPT;io.privkey.keep.NIP44_DECRYPT;io.privkey.keep.DECRYPT_ZAP_EVENT;io.privkey.keep.NIP44_V3_ENCRYPT;io.privkey.keep.NIP44_V3_DECRYPT"'
-new = 'android:authorities="${applicationId}.GET_PUBLIC_KEY;${applicationId}.SIGN_EVENT;${applicationId}.NIP04_ENCRYPT;${applicationId}.NIP04_DECRYPT;${applicationId}.NIP44_ENCRYPT;${applicationId}.NIP44_DECRYPT;${applicationId}.DECRYPT_ZAP_EVENT;${applicationId}.NIP44_V3_ENCRYPT;${applicationId}.NIP44_V3_DECRYPT"'
-if text.count(old) != 1:
-    raise SystemExit("AndroidManifest.xml: unexpected NIP-55 provider authorities")
-manifest.write_text(text.replace(old, new, 1), encoding="utf-8")
+gradle.replace('include("arm64-v8a", "x86_64")', 'include("arm64-v8a")')
 
 
-# Add the advanced offline trusted-dealer setup to the FROST identity screen.
-create_group = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "CreateGroupScreen.kt"
-cg = create_group.read_text(encoding="utf-8")
+# --- Branding strings --------------------------------------------------------
 
-cg = cg.replace(
+strings = Source(*RES, "strings.xml")
+for key, upstream_value in (
+    ("app_name", "Keep"),
+    ("foreground_service_title", "Keep"),
+    ("bunker_service_title", "Keep Bunker"),
+    ("biometric_unlock_title", "Keep"),
+):
+    strings.replace(
+        f'<string name="{key}" translatable="false">{upstream_value}</string>',
+        f'<string name="{key}" translatable="false">{APP_NAME}</string>',
+    )
+
+main_strings = Source(*RES, "strings_main.xml")
+for key, upstream_value, value in (
+    ("main_unlock_title", "Unlock Keep", f"Unlock {APP_NAME}"),
+    ("main_home_title", "Keep", APP_NAME),
+    ("main_create_group_title", "Create Signing Group", "Create FROST Identity"),
+    (
+        "main_create_group_subtitle",
+        "Authenticate to store share securely",
+        "Create a threshold identity and store this device\\'s share securely",
+    ),
+    ("main_create_account_button", "Create Account", "Create single-key account (advanced)"),
+):
+    main_strings.replace(
+        f'<string name="{key}">{upstream_value}</string>',
+        f'<string name="{key}">{value}</string>',
+    )
+
+connections_strings = Source(*RES, "strings_connections.xml")
+connections_strings.replace(
+    '<string name="connections_bunker_rotate_url_button">Rotate Bunker URL</string>',
+    '<string name="connections_bunker_rotate_url_button">Rotate NIP-46 connection keys</string>',
+)
+
+share_strings = Source(*RES, "strings_share.xml")
+share_strings.insert_before(
+    "</resources>",
+    """
+    <!-- Frost bunker advanced offline trusted-dealer setup -->
+    <string name="igloo_offline_tab">Offline</string>
+    <string name="igloo_offline_warning">Advanced setup: this phone temporarily generates the complete threshold key material and every share. Use an offline, trusted device. Distributed setup is safer because no single device ever holds the whole key.</string>
+    <string name="igloo_offline_passphrase">Share export passphrase</string>
+    <string name="igloo_offline_confirm_passphrase">Confirm passphrase</string>
+    <string name="igloo_offline_acknowledge">I understand this device temporarily creates all shares and must be trusted during generation.</string>
+    <string name="igloo_offline_generate">Generate encrypted shares offline</string>
+    <string name="igloo_offline_recommendation">Recommended: keep this phone offline during generation, transfer each encrypted share to a different signer, verify the backups, then remove any exported share copies left on the generating device.</string>
+    <string name="igloo_offline_generated_warning">Generation complete. Save every required share before leaving this screen. The same passphrase protects each exported share.</string>
+    <string name="igloo_offline_share_position">Share %1$d of %2$d · FROST index %3$d</string>
+    <string name="igloo_offline_share_qr">Encrypted FROST share %1$d</string>
+    <string name="igloo_offline_transfer_hint">Scan this QR on the signer that should hold this share. Animated QR frames cycle automatically when the encrypted export is too large for one QR.</string>
+    <string name="igloo_offline_previous">Previous share</string>
+    <string name="igloo_offline_next">Next share</string>
+    <string name="igloo_offline_finish">Clear generated shares from this screen</string>
+""",
+)
+
+
+# --- Manifest and NIP-55 provider authorities --------------------------------
+
+NIP55_AUTHORITIES = (
+    "GET_PUBLIC_KEY",
+    "SIGN_EVENT",
+    "NIP04_ENCRYPT",
+    "NIP04_DECRYPT",
+    "NIP44_ENCRYPT",
+    "NIP44_DECRYPT",
+    "DECRYPT_ZAP_EVENT",
+    "NIP44_V3_ENCRYPT",
+    "NIP44_V3_DECRYPT",
+)
+
+manifest = Source("app", "src", "main", "AndroidManifest.xml")
+manifest.replace(
+    'android:authorities="' + ";".join(f"{UPSTREAM_ID}.{a}" for a in NIP55_AUTHORITIES) + '"',
+    'android:authorities="' + ";".join(f"${{applicationId}}.{a}" for a in NIP55_AUTHORITIES) + '"',
+)
+
+# Register the private receiver behind the notification Reject action.
+manifest.insert_before(
+    '        <service\n            android:name=".nip46.BunkerService"',
+    """
+        <receiver
+            android:name=".nip46.Nip46ApprovalActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+""",
+)
+
+# The provider dispatches on uri.authority against hard-coded upstream
+# authorities. The manifest above registers them under this app's package ID,
+# so the constants must follow or every NIP-55 content-provider request is
+# rejected as "unexpected authority".
+nip55_provider = Source(*KOTLIN, "nip55", "Nip55ContentProvider.kt")
+for authority in NIP55_AUTHORITIES:
+    nip55_provider.replace(
+        f'private const val AUTHORITY_{authority} = "{UPSTREAM_ID}.{authority}"',
+        f'private const val AUTHORITY_{authority} = "{APP_ID}.{authority}"',
+    )
+nip55_provider.replace(f'uri.authority ?: "{UPSTREAM_ID}"', f'uri.authority ?: "{APP_ID}"')
+
+
+# --- FROST identity screen: offline trusted-dealer setup and share refresh ---
+
+create_group = Source(*KOTLIN, "CreateGroupScreen.kt")
+create_group.insert_after(
     "import androidx.compose.ui.text.font.FontFamily\n",
-    "import androidx.compose.ui.text.font.FontFamily\n"
     "import androidx.compose.ui.text.input.PasswordVisualTransformation\n"
     "import androidx.compose.foundation.text.KeyboardOptions\n"
     "import androidx.compose.ui.text.input.KeyboardType\n"
@@ -131,29 +215,24 @@ cg = cg.replace(
     "import kotlinx.coroutines.launch\n"
     "import kotlinx.coroutines.withContext\n"
     "import java.util.Arrays\n",
-    1,
 )
-
-old_sig = """fun CreateGroupScreen(
+create_group.replace(
+    """fun CreateGroupScreen(
     relays: List<String>,
-"""
-new_sig = """fun CreateGroupScreen(
+""",
+    """fun CreateGroupScreen(
     keepMobile: KeepMobile,
     relays: List<String>,
-"""
-if old_sig not in cg:
-    raise SystemExit("CreateGroupScreen signature not found")
-cg = cg.replace(old_sig, new_sig, 1)
-
-old_mode = """    var isJoinMode by remember { mutableStateOf(false) }
-"""
-new_mode = """    var setupMode by remember { mutableStateOf(GroupSetupMode.DISTRIBUTED) }
-"""
-if old_mode not in cg:
-    raise SystemExit("CreateGroupScreen mode state not found")
-cg = cg.replace(old_mode, new_mode, 1)
-
-old_tabs = """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+""",
+)
+create_group.replace(
+    """    var isJoinMode by remember { mutableStateOf(false) }
+""",
+    """    var setupMode by remember { mutableStateOf(GroupSetupMode.DISTRIBUTED) }
+""",
+)
+create_group.replace(
+    """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(
                 selected = !isJoinMode,
                 onClick = { isJoinMode = false },
@@ -177,8 +256,8 @@ old_tabs = """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMax
         } else {
             StartGroupMode(relays = relays, onDkgBegin = onDkgBegin, runDkg = runDkg)
         }
-"""
-new_tabs = """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+""",
+    """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(
                 selected = setupMode == GroupSetupMode.DISTRIBUTED,
                 onClick = { setupMode = GroupSetupMode.DISTRIBUTED },
@@ -212,21 +291,83 @@ new_tabs = """        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMax
             GroupSetupMode.OFFLINE ->
                 OfflineGroupMode(keepMobile = keepMobile)
         }
-"""
-if old_tabs not in cg:
-    raise SystemExit("CreateGroupScreen tabs block not found")
-cg = cg.replace(old_tabs, new_tabs, 1)
+""",
+)
 
-offline_code = r'''
+# Make the common layouts obvious instead of hiding them behind +/- steppers.
+create_group.replace(
+    """            Spacer(modifier = Modifier.height(16.dp))
+
+            Stepper(
+                label = stringResource(R.string.create_group_threshold_label, threshold),
+""",
+    """            Spacer(modifier = Modifier.height(16.dp))
+
+            ThresholdPresets(
+                threshold = threshold,
+                participants = participants,
+                hint = "Pick a preset or use the controls below for a custom group."
+            ) { presetThreshold, presetParticipants ->
+                threshold = presetThreshold
+                participants = presetParticipants
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Stepper(
+                label = stringResource(R.string.create_group_threshold_label, threshold),
+""",
+)
+
+create_group.insert_before(
+    "private enum class CoordPhase { Form, Collect, Ready }\n",
+    r'''
 
 private fun splitNonBlankLines(value: String): List<String> =
     value.lines().map { it.trim() }.filter { it.isNotEmpty() }
+
+private val THRESHOLD_PRESETS = listOf(2 to 3, 3 to 5)
+
+@Composable
+private fun ThresholdPresets(
+    threshold: Int,
+    participants: Int,
+    hint: String,
+    onSelect: (threshold: Int, participants: Int) -> Unit
+) {
+    Text(
+        text = "Quick threshold presets",
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        THRESHOLD_PRESETS.forEach { preset ->
+            FilterChip(
+                selected = threshold == preset.first && participants == preset.second,
+                onClick = { onSelect(preset.first, preset.second) },
+                label = { Text("${preset.first} of ${preset.second}") },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+    Text(
+        text = hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
 
 @Composable
 private fun OfflineRefreshMode(
     keepMobile: KeepMobile,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sharesText by remember { mutableStateOf("") }
     val oldPassphrase = remember { SecurePassphrase() }
@@ -240,8 +381,12 @@ private fun OfflineRefreshMode(
     var selectedShare by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    // Keep the complete share set and its passphrases out of screenshots,
+    // screen recordings and the recents thumbnail.
     DisposableEffect(Unit) {
+        setSecureScreen(context, true)
         onDispose {
+            setSecureScreen(context, false)
             oldPassphrase.clear()
             newPassphrase.clear()
             confirmPassphrase.clear()
@@ -267,7 +412,10 @@ private fun OfflineRefreshMode(
             contentColor = MaterialTheme.colorScheme.onTertiaryContainer
         )
         Spacer(modifier = Modifier.height(16.dp))
-        NpubDisplay(hexToNpub(refreshed.groupPubkey) ?: refreshed.groupPubkey)
+        val npub = remember(refreshed.groupPubkey) {
+            hexToNpub(refreshed.groupPubkey) ?: refreshed.groupPubkey
+        }
+        NpubDisplay(npub)
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             "New share " + (selectedShare + 1) + " of " + refreshed.shares.size,
@@ -336,12 +484,21 @@ private fun OfflineRefreshMode(
             error = null
         },
         label = { Text("Current encrypted shares (one kshare1... per line)") },
+        // Share exports are not dictionary words: keep the keyboard from
+        // autocorrecting them or learning them as suggestions.
+        keyboardOptions = KeyboardOptions(
+            autoCorrectEnabled = false,
+            keyboardType = KeyboardType.Ascii
+        ),
         modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
         minLines = 5
     )
 
     Spacer(modifier = Modifier.height(12.dp))
 
+    // KeyboardType.Password stops the IME from offering, learning or syncing
+    // the passphrase as a typed word; the visual transformation alone only
+    // hides it on screen.
     OutlinedTextField(
         value = oldPassphraseDisplay,
         onValueChange = {
@@ -351,6 +508,7 @@ private fun OfflineRefreshMode(
         },
         label = { Text("Current share passphrase") },
         visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -366,6 +524,7 @@ private fun OfflineRefreshMode(
         },
         label = { Text("New share passphrase") },
         visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -381,6 +540,7 @@ private fun OfflineRefreshMode(
         },
         label = { Text("Confirm new passphrase") },
         visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
@@ -429,7 +589,7 @@ private fun OfflineRefreshMode(
                             confirmPassphraseDisplay = ""
                         } catch (e: Exception) {
                             if (BuildConfig.DEBUG) {
-                                Log.e("OfflineFrost", "Share refresh failed", e)
+                                Log.e("OfflineFrost", "Share refresh failed: ${e::class.simpleName}")
                             }
                             error = "FROST share rotation failed. Verify that every current share and passphrase is correct."
                         } finally {
@@ -469,6 +629,7 @@ private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
 
 @Composable
 private fun OfflineGroupMode(keepMobile: KeepMobile) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val passphrase = remember { SecurePassphrase() }
     val confirmPassphrase = remember { SecurePassphrase() }
@@ -489,8 +650,12 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
         return
     }
 
+    // Keep passphrase entry and every generated share out of screenshots,
+    // screen recordings and the recents thumbnail.
     DisposableEffect(Unit) {
+        setSecureScreen(context, true)
         onDispose {
+            setSecureScreen(context, false)
             passphrase.clear()
             confirmPassphrase.clear()
             passphraseDisplay = ""
@@ -619,6 +784,17 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
 
     Spacer(modifier = Modifier.height(16.dp))
 
+    ThresholdPresets(
+        threshold = threshold,
+        participants = participants,
+        hint = "Offline mode will generate all selected shares on this device so you can distribute them afterward."
+    ) { presetThreshold, presetParticipants ->
+        threshold = presetThreshold
+        participants = presetParticipants
+    }
+
+    Spacer(modifier = Modifier.height(16.dp))
+
     Stepper(
         label = stringResource(R.string.create_group_threshold_label, threshold),
         decrementDescription = stringResource(R.string.create_group_threshold_decrement),
@@ -641,9 +817,9 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
                 if (threshold > participants) threshold = participants
             }
         },
-        onIncrement = { if (participants < 8) participants++ },
+        onIncrement = { if (participants < MAX_PARTICIPANTS) participants++ },
         canDecrement = participants > 2,
-        canIncrement = participants < 8
+        canIncrement = participants < MAX_PARTICIPANTS
     )
 
     Spacer(modifier = Modifier.height(16.dp))
@@ -736,7 +912,7 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
                             confirmPassphraseDisplay = ""
                         } catch (e: Exception) {
                             if (BuildConfig.DEBUG) {
-                                Log.e("OfflineFrost", "Trusted-dealer generation failed: \${e::class.simpleName}")
+                                Log.e("OfflineFrost", "Trusted-dealer generation failed: ${e::class.simpleName}")
                             }
                             errorMessage = "Offline share generation failed"
                         } finally {
@@ -768,156 +944,43 @@ private fun OfflineGroupMode(keepMobile: KeepMobile) {
     )
 }
 
-'''
-marker = "private enum class CoordPhase { Form, Collect, Ready }\n"
-if marker not in cg:
-    raise SystemExit("CoordPhase marker not found")
-cg = cg.replace(marker, offline_code + marker, 1)
+''',
+)
 
-# FROSTFED_THRESHOLD_PRESETS
-# Make the common layouts obvious instead of hiding them behind +/- steppers.
-preset_anchor = """            Spacer(modifier = Modifier.height(16.dp))
 
-            Stepper(
-                label = stringResource(R.string.create_group_threshold_label, threshold),
-"""
-preset_block = """            Spacer(modifier = Modifier.height(16.dp))
+# --- MainActivity: pass KeepMobile through, request notification permission --
 
-            Text(
-                text = "Quick threshold presets",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = threshold == 2 && participants == 3,
-                    onClick = {
-                        threshold = 2
-                        participants = 3
-                    },
-                    label = { Text("2 of 3") },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = threshold == 3 && participants == 5,
-                    onClick = {
-                        threshold = 3
-                        participants = 5
-                    },
-                    label = { Text("3 of 5") },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Text(
-                text = "Pick a preset or use the controls below for a custom group.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Stepper(
-                label = stringResource(R.string.create_group_threshold_label, threshold),
-"""
-if preset_anchor not in cg:
-    raise SystemExit("distributed threshold preset anchor not found")
-cg = cg.replace(preset_anchor, preset_block, 1)
-
-offline_preset_anchor = """    Spacer(modifier = Modifier.height(16.dp))
-
-    Stepper(
-        label = stringResource(R.string.create_group_threshold_label, threshold),
-"""
-offline_preset_block = """    Spacer(modifier = Modifier.height(16.dp))
-
-    Text(
-        text = "Quick threshold presets",
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.fillMaxWidth()
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        FilterChip(
-            selected = threshold == 2 && participants == 3,
-            onClick = {
-                threshold = 2
-                participants = 3
-            },
-            label = { Text("2 of 3") },
-            modifier = Modifier.weight(1f)
-        )
-        FilterChip(
-            selected = threshold == 3 && participants == 5,
-            onClick = {
-                threshold = 3
-                participants = 5
-            },
-            label = { Text("3 of 5") },
-            modifier = Modifier.weight(1f)
-        )
-    }
-    Text(
-        text = "Offline mode will generate all selected shares on this device so you can distribute them afterward.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth()
-    )
-
-    Spacer(modifier = Modifier.height(16.dp))
-
-    Stepper(
-        label = stringResource(R.string.create_group_threshold_label, threshold),
-"""
-if offline_preset_anchor not in cg:
-    raise SystemExit("offline threshold preset anchor not found")
-cg = cg.replace(offline_preset_anchor, offline_preset_block, 1)
-
-create_group.write_text(cg, encoding="utf-8")
-
-main_activity = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "MainActivity.kt"
-ma = main_activity.read_text(encoding="utf-8")
-old_call = """        CreateGroupScreen(
+main_activity = Source(*KOTLIN, "MainActivity.kt")
+main_activity.replace(
+    """        CreateGroupScreen(
             relays = groupRelays,
-"""
-new_call = """        CreateGroupScreen(
+""",
+    """        CreateGroupScreen(
             keepMobile = keepMobile,
             relays = groupRelays,
-"""
-if old_call not in ma:
-    raise SystemExit("MainActivity CreateGroupScreen call not found")
-main_activity.write_text(ma.replace(old_call, new_call, 1), encoding="utf-8")
+""",
+)
 
 # Android 13+ notification permission. The manifest declares the permission,
 # but modern Android requires a runtime prompt before approval notifications
 # can appear.
-ma = main_activity.read_text(encoding="utf-8")
-ma = ma.replace(
+main_activity.replace(
     "import android.content.Context\n",
     "import android.Manifest\n"
     "import android.content.Context\n"
     "import android.content.pm.PackageManager\n"
     "import android.os.Build\n",
-    1,
 )
-ma = ma.replace(
+main_activity.insert_after(
     "import androidx.fragment.app.FragmentActivity\n",
-    "import androidx.fragment.app.FragmentActivity\n"
     "import androidx.core.content.ContextCompat\n",
-    1,
 )
-oncreate_anchor = """        super.onCreate(savedInstanceState)
+main_activity.replace(
+    """        super.onCreate(savedInstanceState)
 
         val app = application as? KeepMobileApp ?: run { finish(); return }
-"""
-oncreate_replacement = """        super.onCreate(savedInstanceState)
+""",
+    """        super.onCreate(savedInstanceState)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
@@ -932,45 +995,20 @@ oncreate_replacement = """        super.onCreate(savedInstanceState)
         }
 
         val app = application as? KeepMobileApp ?: run { finish(); return }
-"""
-if oncreate_anchor not in ma:
-    raise SystemExit("MainActivity onCreate anchor not found")
-ma = ma.replace(oncreate_anchor, oncreate_replacement, 1)
-main_activity.write_text(ma, encoding="utf-8")
+""",
+)
 
 
-share_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_share.xml"
-ss = share_strings.read_text(encoding="utf-8")
-offline_strings = """
-    <!-- Frost bunker advanced offline trusted-dealer setup -->
-    <string name="igloo_offline_tab">Offline</string>
-    <string name="igloo_offline_warning">Advanced setup: this phone temporarily generates the complete threshold key material and every share. Use an offline, trusted device. Distributed setup is safer because no single device ever holds the whole key.</string>
-    <string name="igloo_offline_passphrase">Share export passphrase</string>
-    <string name="igloo_offline_confirm_passphrase">Confirm passphrase</string>
-    <string name="igloo_offline_acknowledge">I understand this device temporarily creates all shares and must be trusted during generation.</string>
-    <string name="igloo_offline_generate">Generate encrypted shares offline</string>
-    <string name="igloo_offline_recommendation">Recommended: keep this phone offline during generation, transfer each encrypted share to a different signer, verify the backups, then remove any exported share copies left on the generating device.</string>
-    <string name="igloo_offline_generated_warning">Generation complete. Save every required share before leaving this screen. The same passphrase protects each exported share.</string>
-    <string name="igloo_offline_share_position">Share %1$d of %2$d · FROST index %3$d</string>
-    <string name="igloo_offline_share_qr">Encrypted FROST share %1$d</string>
-    <string name="igloo_offline_transfer_hint">Scan this QR on the signer that should hold this share. Animated QR frames cycle automatically when the encrypted export is too large for one QR.</string>
-    <string name="igloo_offline_previous">Previous share</string>
-    <string name="igloo_offline_next">Next share</string>
-    <string name="igloo_offline_finish">Clear generated shares from this screen</string>
-"""
-if "</resources>" not in ss:
-    raise SystemExit("strings_share.xml missing resources terminator")
-share_strings.write_text(ss.replace("</resources>", offline_strings + "</resources>", 1), encoding="utf-8")
+# --- BunkerService: hardened foreground start, Amber-style approvals ---------
 
+bunker_service = Source(*KOTLIN, "nip46", "BunkerService.kt")
 
-
-# Harden bunker foreground notification paths. A failed notification or FGS
-# promotion should set an error state instead of taking down the whole process.
-bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
-bs = bunker_service.read_text(encoding="utf-8")
-old_start = """        startForeground(NOTIFICATION_ID, createNotification(isActive = false))
-"""
-new_start = """        try {
+# A failed notification or FGS promotion should set an error state instead of
+# taking down the whole process.
+bunker_service.replace(
+    """        startForeground(NOTIFICATION_ID, createNotification(isActive = false))
+""",
+    """        try {
             startForeground(NOTIFICATION_ID, createNotification(isActive = false))
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) Log.e(TAG, "Unable to enter foreground mode", e)
@@ -978,17 +1016,15 @@ new_start = """        try {
             stopSelf()
             return START_NOT_STICKY
         }
-"""
-if old_start not in bs:
-    raise SystemExit("BunkerService startForeground anchor not found")
-bs = bs.replace(old_start, new_start, 1)
-
-old_update = """    private fun updateNotification(isActive: Boolean) {
+""",
+)
+bunker_service.replace(
+    """    private fun updateNotification(isActive: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, createNotification(isActive))
     }
-"""
-new_update = """    private fun updateNotification(isActive: Boolean) {
+""",
+    """    private fun updateNotification(isActive: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         runCatching {
             manager.notify(NOTIFICATION_ID, createNotification(isActive))
@@ -996,31 +1032,203 @@ new_update = """    private fun updateNotification(isActive: Boolean) {
             if (BuildConfig.DEBUG) Log.e(TAG, "Failed to update bunker notification", it)
         }
     }
-"""
-if old_update not in bs:
-    raise SystemExit("BunkerService updateNotification anchor not found")
-bs = bs.replace(old_update, new_update, 1)
-bunker_service.write_text(bs, encoding="utf-8")
-
-connections_strings = root / "app" / "src" / "main" / "res" / "values" / "strings_connections.xml"
-cs = connections_strings.read_text(encoding="utf-8")
-cs = cs.replace(
-    '<string name="connections_bunker_rotate_url_button">Rotate bunker URL</string>',
-    '<string name="connections_bunker_rotate_url_button">Rotate NIP-46 connection keys</string>',
-    1,
+""",
 )
-connections_strings.write_text(cs, encoding="utf-8")
+
+# NIP-46 signing approvals arrive as a normal high-priority notification with
+# inline Approve/Reject actions. Do not force-launch an activity from the
+# background; tapping the notification still opens the detailed approval screen.
+bunker_service.replace(
+    """        runCatching { startActivity(intent) }
+        postApprovalNotification(requestId, request, intent)
+""",
+    """        postApprovalNotification(requestId, request, intent)
+""",
+)
+bunker_service.insert_before(
+    """        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
+        val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
+""",
+    """        // Approval must still pass through Nip46ApprovalActivity so the
+        // biometric/Keystore gate cannot be bypassed from a notification action.
+        val approveIntent = contentIntent
+        val rejectIntent = PendingIntent.getBroadcast(
+            this,
+            notificationId * 2 + 2,
+            Intent(this, Nip46ApprovalActionReceiver::class.java)
+                .setAction(Nip46ApprovalActionReceiver.ACTION_REJECT)
+                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+""",
+)
+# Also drops the alarm/call-style full-screen intent.
+bunker_service.replace(
+    """            .setContentIntent(contentIntent)
+            .setFullScreenIntent(contentIntent, true)
+            .setAutoCancel(true)
+""",
+    """            .setContentIntent(contentIntent)
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.cosign_approve),
+                approveIntent
+            )
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.cosign_reject),
+                rejectIntent
+            )
+            .setAutoCancel(true)
+""",
+)
+
+approval_receiver = Source(*KOTLIN, "nip46", "Nip46ApprovalActionReceiver.kt", create=True)
+approval_receiver.text = f'''package io.privkey.keep.nip46
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+
+class Nip46ApprovalActionReceiver : BroadcastReceiver() {{
+    override fun onReceive(context: Context, intent: Intent) {{
+        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
+        if (intent.action == ACTION_REJECT) {{
+            BunkerService.respondToApproval(requestId, false)
+        }}
+    }}
+
+    companion object {{
+        const val ACTION_REJECT = "{APP_ID}.NIP46_REJECT"
+        const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
+    }}
+}}
+'''
 
 
+# --- Crash capture: persist the last uncaught exception for diagnostics ------
 
-# Expose proactive FROST share refresh to Android. This requires the COMPLETE
-# current share set and preserves the group public key/npub while replacing all
-# signing shares. It is intentionally an offline trusted-device operation.
-keep_mobile_rs = root / "keep" / "keep-mobile" / "src" / "lib.rs"
-km = keep_mobile_rs.read_text(encoding="utf-8")
-refresh_anchor = """    /// FFI split, option B (§8): mint (or re-mint) this device's per-group DKG
-"""
-refresh_method = r'''    /// Refresh an existing complete FROST share set offline.
+keep_app = Source(*KOTLIN, "KeepMobileApp.kt")
+keep_app.replace(
+    """    override fun onCreate() {
+        super.onCreate()
+        initializeKeepMobile()
+""",
+    """    override fun onCreate() {
+        super.onCreate()
+        installCrashCapture()
+        initializeKeepMobile()
+""",
+)
+keep_app.insert_before(
+    """    private fun initializeKeepMobile() {
+""",
+    r'''    private fun installCrashCapture() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                // Exception messages can embed user data (relay URLs, event
+                // content, fragments of a share or key in a parse error), and
+                // this report is written unencrypted and later shared through
+                // the diagnostics export. Persist only exception class names
+                // and stack frames, bounded in depth and length.
+                val report = buildString {
+                    appendLine("timestamp=" + java.time.Instant.now().toString())
+                    appendLine("thread=" + thread.name)
+                    var current: Throwable? = throwable
+                    var depth = 0
+                    while (current != null && depth < 8) {
+                        appendLine((if (depth == 0) "exception=" else "caused_by=") + current.javaClass.name)
+                        for (frame in current.stackTrace.take(64)) {
+                            appendLine("    at $frame")
+                        }
+                        current = current.cause
+                        depth++
+                    }
+                }
+                java.io.File(filesDir, "last_crash.txt").writeText(report, Charsets.UTF_8)
+            }
+            if (previous != null) {
+                previous.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
+        }
+    }
+
+''',
+)
+
+export_logs = Source(*KOTLIN, "ExportLogsScreen.kt")
+export_logs.insert_after(
+    "import android.content.ActivityNotFoundException\n",
+    "import android.content.Context\n",
+)
+export_logs.replace(
+    """                    buildExportContent(
+                        keepMobile = keepMobile,
+""",
+    """                    buildExportContent(
+                        context = context,
+                        keepMobile = keepMobile,
+""",
+)
+export_logs.replace(
+    """private suspend fun buildExportContent(
+    keepMobile: KeepMobile,
+""",
+    """private suspend fun buildExportContent(
+    context: Context,
+    keepMobile: KeepMobile,
+""",
+)
+export_logs.insert_before(
+    """    return buildString {
+        appendLine("=== Keep Diagnostics ===")
+""",
+    r'''    val lastCrash = runCatching {
+        File(context.filesDir, "last_crash.txt")
+            .takeIf { it.isFile }
+            ?.readText(Charsets.UTF_8)
+            ?.take(100_000)
+    }.getOrNull()
+
+''',
+)
+export_logs.insert_after(
+    """        if (activityLogResult == null) {
+            appendLine("(unavailable)")
+        } else {
+            val (text, exported, total) = activityLogResult
+            if (total > exported) {
+                appendLine("(truncated to $exported of $total entries)")
+            }
+            if (text.isBlank()) appendLine("(no activity)") else appendLine(text)
+        }
+""",
+    r'''        appendLine()
+        appendLine("=== Last Uncaught Crash ===")
+        if (lastCrash.isNullOrBlank()) {
+            appendLine("(none captured)")
+        } else {
+            appendLine(lastCrash)
+        }
+''',
+)
+
+
+# --- Rust core: expose proactive FROST share refresh to Android --------------
+#
+# This requires the COMPLETE current share set and preserves the group public
+# key/npub while replacing all signing shares. It is intentionally an offline
+# trusted-device operation.
+
+keep_mobile_rs = Source("keep", "keep-mobile", "src", "lib.rs")
+keep_mobile_rs.insert_before(
+    """    /// FFI split, option B (§8): mint (or re-mint) this device's per-group DKG
+""",
+    r'''    /// Refresh an existing complete FROST share set offline.
     ///
     /// This is proactive share rotation: the group public key stays the same,
     /// while every signing share changes. The full current share set is required
@@ -1032,6 +1240,12 @@ refresh_method = r'''    /// Refresh an existing complete FROST share set offlin
         name: String,
         new_passphrase: String,
     ) -> Result<FrostGenerationResult, KeepMobileError> {
+        let share_data: Vec<Zeroizing<String>> =
+            share_data.into_iter().map(Zeroizing::new).collect();
+        let passphrases: Vec<Zeroizing<String>> =
+            passphrases.into_iter().map(Zeroizing::new).collect();
+        let new_passphrase = Zeroizing::new(new_passphrase);
+
         Self::validate_share_name(&name)?;
         if share_data.is_empty() || share_data.len() != passphrases.len() {
             return Err(KeepMobileError::InvalidShare {
@@ -1039,13 +1253,8 @@ refresh_method = r'''    /// Refresh an existing complete FROST share set offlin
             });
         }
 
-        let share_data: Vec<Zeroizing<String>> =
-            share_data.into_iter().map(Zeroizing::new).collect();
-        let passphrases: Vec<Zeroizing<String>> =
-            passphrases.into_iter().map(Zeroizing::new).collect();
-
-        let mut shares = Vec::with_capacity(share_data.len());
-        for (data, passphrase) in share_data.iter().zip(passphrases.iter()) {
+        let mut exports = Vec::with_capacity(share_data.len());
+        for data in &share_data {
             let export = ShareExport::parse(data.as_str())
                 .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
             if export.ciphersuite != keep_core::frost::Ciphersuite::Secp256k1Tr {
@@ -1053,6 +1262,47 @@ refresh_method = r'''    /// Refresh an existing complete FROST share set offlin
                     msg: "Only secp256k1 (Bitcoin/Nostr) shares are supported".into(),
                 });
             }
+            exports.push(export);
+        }
+
+        // Reject an incomplete, mixed or duplicated set from the cleartext
+        // export headers before decrypting anything: every decryption below
+        // costs a full Argon2id derivation (256 MiB, several seconds on a
+        // phone). The headers are not trusted; the same invariants are
+        // re-checked on the decrypted shares.
+        let first_export = exports.first().ok_or_else(|| KeepMobileError::InvalidShare {
+            msg: "No shares supplied".into(),
+        })?;
+        if exports.len() != first_export.total as usize {
+            return Err(KeepMobileError::InvalidShare {
+                msg: format!(
+                    "Share refresh requires the full set of {} shares; got {}",
+                    first_export.total,
+                    exports.len()
+                ),
+            });
+        }
+        let mut export_identifiers = std::collections::HashSet::new();
+        for export in &exports {
+            if !export
+                .group_pubkey
+                .eq_ignore_ascii_case(&first_export.group_pubkey)
+                || export.threshold != first_export.threshold
+                || export.total != first_export.total
+            {
+                return Err(KeepMobileError::InvalidShare {
+                    msg: "Shares do not belong to the same FROST group".into(),
+                });
+            }
+            if !export_identifiers.insert(export.identifier) {
+                return Err(KeepMobileError::InvalidShare {
+                    msg: "Duplicate FROST share identifier".into(),
+                });
+            }
+        }
+
+        let mut shares = Vec::with_capacity(exports.len());
+        for (export, passphrase) in exports.iter().zip(passphrases.iter()) {
             let share = export
                 .to_share(passphrase, &name)
                 .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
@@ -1100,239 +1350,12 @@ refresh_method = r'''    /// Refresh an existing complete FROST share set offlin
             });
         }
 
-        let new_passphrase = Zeroizing::new(new_passphrase);
         Self::build_generation_result(&refreshed, &new_passphrase)
     }
 
-'''
-if refresh_anchor not in km:
-    raise SystemExit("KeepMobile FROST DKG anchor not found")
-km = km.replace(refresh_anchor, refresh_method + refresh_anchor, 1)
-keep_mobile_rs.write_text(km, encoding="utf-8")
-
-
-
-# Amber-style NIP-46 signing approval notifications with inline Approve/Reject
-# actions. Do not force-launch an activity from the background; tapping the
-# notification still opens the detailed approval screen.
-approval_receiver = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "Nip46ApprovalActionReceiver.kt"
-approval_receiver.write_text(r'''package io.privkey.keep.nip46
-
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-
-class Nip46ApprovalActionReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
-        if (intent.action == ACTION_REJECT) {
-            BunkerService.respondToApproval(requestId, false)
-        }
-    }
-
-    companion object {
-        const val ACTION_REJECT = "org.glowstr.igloomobile.NIP46_REJECT"
-        const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
-    }
-}
-''', encoding="utf-8")
-
-# Register the private receiver.
-manifest = root / "app" / "src" / "main" / "AndroidManifest.xml"
-mt = manifest.read_text(encoding="utf-8")
-receiver_xml = """
-        <receiver
-            android:name=".nip46.Nip46ApprovalActionReceiver"
-            android:enabled="true"
-            android:exported="false" />
-
-"""
-if receiver_xml.strip() not in mt:
-    mt = mt.replace(
-        "        <service\n            android:name=\".nip46.BunkerService\"",
-        receiver_xml + "        <service\n            android:name=\".nip46.BunkerService\"",
-        1,
-    )
-manifest.write_text(mt, encoding="utf-8")
-
-bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
-bs = bunker_service.read_text(encoding="utf-8")
-bs = bs.replace(
-    """        runCatching { startActivity(intent) }
-        postApprovalNotification(requestId, request, intent)
-""",
-    """        postApprovalNotification(requestId, request, intent)
-""",
-    1,
+''',
 )
 
-notify_anchor = """        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
-        val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
-"""
-notify_replacement = """        // Approval must still pass through Nip46ApprovalActivity so the
-        // biometric/Keystore gate cannot be bypassed from a notification action.
-        val approveIntent = contentIntent
-        val rejectIntent = PendingIntent.getBroadcast(
-            this,
-            notificationId * 2 + 2,
-            Intent(this, Nip46ApprovalActionReceiver::class.java)
-                .setAction(Nip46ApprovalActionReceiver.ACTION_REJECT)
-                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
-        val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
-"""
-if notify_anchor not in bs:
-    raise SystemExit("NIP-46 approval notification anchor not found")
-bs = bs.replace(notify_anchor, notify_replacement, 1)
 
-action_anchor = """            .setContentIntent(contentIntent)
-            .setFullScreenIntent(contentIntent, true)
-            .setAutoCancel(true)
-"""
-action_replacement = """            .setContentIntent(contentIntent)
-            .setFullScreenIntent(contentIntent, true)
-            .addAction(
-                R.drawable.ic_notification,
-                getString(R.string.cosign_approve),
-                approveIntent
-            )
-            .addAction(
-                R.drawable.ic_notification,
-                getString(R.string.cosign_reject),
-                rejectIntent
-            )
-            .setAutoCancel(true)
-"""
-if action_anchor not in bs:
-    raise SystemExit("NIP-46 notification action anchor not found")
-bs = bs.replace(action_anchor, action_replacement, 1)
-bunker_service.write_text(bs, encoding="utf-8")
-
-
-
-# Persist the last uncaught Android exception and include it in the existing
-# diagnostics export. This gives the next runtime crash a usable stack trace.
-keep_app = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "KeepMobileApp.kt"
-ka = keep_app.read_text(encoding="utf-8")
-ka = ka.replace(
-    """    override fun onCreate() {
-        super.onCreate()
-        initializeKeepMobile()
-""",
-    """    override fun onCreate() {
-        super.onCreate()
-        installCrashCapture()
-        initializeKeepMobile()
-""",
-    1,
-)
-crash_method_anchor = """    private fun initializeKeepMobile() {
-"""
-crash_method = r'''    private fun installCrashCapture() {
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            runCatching {
-                val crashFile = java.io.File(filesDir, "last_crash.txt")
-                val report = buildString {
-                    appendLine("timestamp=" + java.time.Instant.now().toString())
-                    appendLine("thread=" + thread.name)
-                    appendLine("exception=" + throwable::class.java.name)
-                    appendLine("message=" + (throwable.message ?: ""))
-                    appendLine()
-                    appendLine(throwable.stackTraceToString())
-                }
-                crashFile.writeText(report, Charsets.UTF_8)
-            }
-            if (previous != null) {
-                previous.uncaughtException(thread, throwable)
-            } else {
-                android.os.Process.killProcess(android.os.Process.myPid())
-                kotlin.system.exitProcess(10)
-            }
-        }
-    }
-
-'''
-if crash_method_anchor not in ka:
-    raise SystemExit("KeepMobileApp crash-method anchor not found")
-ka = ka.replace(crash_method_anchor, crash_method + crash_method_anchor, 1)
-keep_app.write_text(ka, encoding="utf-8")
-
-export_logs = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "ExportLogsScreen.kt"
-el = export_logs.read_text(encoding="utf-8")
-el = el.replace(
-    "import android.content.ActivityNotFoundException\n",
-    "import android.content.ActivityNotFoundException\nimport android.content.Context\n",
-    1,
-)
-el = el.replace(
-    """                    buildExportContent(
-                        keepMobile = keepMobile,
-""",
-    """                    buildExportContent(
-                        context = context,
-                        keepMobile = keepMobile,
-""",
-    1,
-)
-el = el.replace(
-    """private suspend fun buildExportContent(
-    keepMobile: KeepMobile,
-""",
-    """private suspend fun buildExportContent(
-    context: Context,
-    keepMobile: KeepMobile,
-""",
-    1,
-)
-crash_read_anchor = """    return buildString {
-        appendLine("=== Keep Diagnostics ===")
-"""
-crash_read_replacement = r'''    val lastCrash = runCatching {
-        File(context.filesDir, "last_crash.txt")
-            .takeIf { it.isFile }
-            ?.readText(Charsets.UTF_8)
-            ?.take(100_000)
-    }.getOrNull()
-
-    return buildString {
-        appendLine("=== Keep Diagnostics ===")
-'''
-if crash_read_anchor not in el:
-    raise SystemExit("ExportLogs buildString anchor not found")
-el = el.replace(crash_read_anchor, crash_read_replacement, 1)
-
-activity_tail = """        if (activityLogResult == null) {
-            appendLine("(unavailable)")
-        } else {
-            val (text, exported, total) = activityLogResult
-            if (total > exported) {
-                appendLine("(truncated to $exported of $total entries)")
-            }
-            if (text.isBlank()) appendLine("(no activity)") else appendLine(text)
-        }
-"""
-activity_replacement = activity_tail + r'''        appendLine()
-        appendLine("=== Last Uncaught Crash ===")
-        if (lastCrash.isNullOrBlank()) {
-            appendLine("(none captured)")
-        } else {
-            appendLine(lastCrash)
-        }
-'''
-if activity_tail not in el:
-    raise SystemExit("ExportLogs activity tail not found")
-el = el.replace(activity_tail, activity_replacement, 1)
-export_logs.write_text(el, encoding="utf-8")
-
-
-# Keep NIP-46 signing requests as normal high-priority approval notifications,
-# not alarm/call-style full-screen notifications.
-bunker_service = root / "app" / "src" / "main" / "kotlin" / "io" / "privkey" / "keep" / "nip46" / "BunkerService.kt"
-bs = bunker_service.read_text(encoding="utf-8")
-bs = bs.replace("            .setFullScreenIntent(contentIntent, true)\n", "")
-bunker_service.write_text(bs, encoding="utf-8")
-
+Source.save_all()
 print("Frost bunker overlay applied successfully")

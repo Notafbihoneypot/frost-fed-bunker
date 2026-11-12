@@ -19,10 +19,17 @@ concurrency:
 env:
   KEEP_ANDROID_SHA: f0db28aa218f18b71be60e3b1cf39eb51705e791
   KEEP_CORE_SHA: d9192f5801949700dbefff2c9634b0fe904edf9e
+  APP_ID: org.glowstr.igloomobile
+  APP_LABEL: Frost bunker
+  APP_VERSION: "0.1.1"
   ANDROID_HOME: /usr/local/lib/android/sdk
   NDK_VERSION: "29.0.14206865"
+  BUILD_TOOLS_VERSION: "36.0.0"
   CARGO_NDK_VERSION: "4.1.2"
   RUST_VERSION: "1.89.0"
+  # Same aws-lc build mode for every Gradle invocation, so the native library
+  # in the debug and release APKs comes from one identical Rust build.
+  AWS_LC_SYS_CMAKE_BUILDER: "1"
 
 jobs:
   build:
@@ -32,17 +39,26 @@ jobs:
     steps:
       - name: Check out project overlay
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Nothing below pushes or calls the API: do not leave the job token
+          # on disk next to third-party build scripts.
+          persist-credentials: false
 
       - name: Check out pinned Keep Android and Rust core
         run: |
           set -euo pipefail
-          git clone --filter=blob:none https://github.com/privkeyio/keep-android.git upstream-keep-android
-          git -C upstream-keep-android checkout --detach "$KEEP_ANDROID_SHA"
-          git clone --filter=blob:none https://github.com/privkeyio/keep.git upstream-keep-android/keep
-          git -C upstream-keep-android/keep checkout --detach "$KEEP_CORE_SHA"
+          # Fetch exactly the pinned commits (no history); the commit ID is
+          # content-addressed, so a matching HEAD is the pinned source.
+          fetch_pinned() {
+            git init -q "$2"
+            git -C "$2" remote add origin "$1"
+            git -C "$2" fetch -q --depth 1 origin "$3"
+            git -C "$2" -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+            test "$(git -C "$2" rev-parse HEAD)" = "$3"
+          }
+          fetch_pinned https://github.com/privkeyio/keep-android.git upstream-keep-android "$KEEP_ANDROID_SHA"
+          fetch_pinned https://github.com/privkeyio/keep.git upstream-keep-android/keep "$KEEP_CORE_SHA"
           test "$(cat upstream-keep-android/keep.version)" = "$KEEP_CORE_SHA"
-          test "$(git -C upstream-keep-android rev-parse HEAD)" = "$KEEP_ANDROID_SHA"
-          test "$(git -C upstream-keep-android/keep rev-parse HEAD)" = "$KEEP_CORE_SHA"
 
       - name: Apply Frost Fed Bunker Android overlay
         run: python3 apply-overlay.py upstream-keep-android
@@ -51,15 +67,31 @@ jobs:
         run: |
           set -euo pipefail
           if ! git -C upstream-keep-android/keep diff --quiet -- keep-mobile/src/lib.rs; then
+            # Date the local commit after this repository's HEAD commit instead
+            # of the wall clock: the patched commit ID (and keep.version) is then
+            # the same for every build of the same overlay commit, and so is the
+            # SOURCE_DATE_EPOCH derived from it below.
+            OVERLAY_EPOCH="$(git log -1 --format=%ct)"
+            export GIT_AUTHOR_DATE="@$OVERLAY_EPOCH +0000"
+            export GIT_COMMITTER_DATE="@$OVERLAY_EPOCH +0000"
             git -C upstream-keep-android/keep config user.name "Frost Fed Bunker CI"
             git -C upstream-keep-android/keep config user.email "actions@users.noreply.github.com"
             git -C upstream-keep-android/keep add keep-mobile/src/lib.rs
-            git -C upstream-keep-android/keep commit -m "frost-fed-bunker: mobile share refresh overlay"
+            git -C upstream-keep-android/keep commit -q -m "frost-fed-bunker: mobile share refresh overlay"
             PATCHED_KEEP_SHA="$(git -C upstream-keep-android/keep rev-parse HEAD)"
             printf '%s\n' "$PATCHED_KEEP_SHA" > upstream-keep-android/keep.version
           fi
           test -z "$(git -C upstream-keep-android/keep status --porcelain)"
           test "$(cat upstream-keep-android/keep.version)" = "$(git -C upstream-keep-android/keep rev-parse HEAD)"
+          echo "Patched Keep core commit: $(cat upstream-keep-android/keep.version)"
+
+          # Upstream refuses release builds without SOURCE_DATE_EPOCH (it makes
+          # APK packaging timestamps deterministic). Derive it the same way
+          # upstream's build-rust.sh does and use it for every build step.
+          SOURCE_DATE_EPOCH="$(KEEP_REPO="$GITHUB_WORKSPACE/upstream-keep-android/keep" \
+            upstream-keep-android/scripts/derive-sde.sh)"
+          [[ "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" | tee -a "$GITHUB_ENV"
 
       - name: Set up JDK 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
@@ -95,26 +127,29 @@ jobs:
           KEEP_REPO: ${{ github.workspace }}/upstream-keep-android/keep
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
           TARGETS: aarch64-linux-android
-          AWS_LC_SYS_CMAKE_BUILDER: "1"
         run: |
           set -euo pipefail
           ./gradlew assembleDebug --no-daemon
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          test -x "$BUILD_TOOLS/apksigner"
+          APK_NAME="Frost-bunker-$APP_VERSION-debug-arm64.apk"
           mkdir -p "$GITHUB_WORKSPACE/dist"
           mapfile -t APKS < <(find app/build/outputs/apk/debug -type f -name '*.apk' | sort)
           printf 'Built APKs:\n%s\n' "${APKS[*]}"
           test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-bunker-0.1.1-debug-arm64.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-bunker-0.1.1-debug-arm64.apk" || \
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-bunker-0.1.1-debug-arm64.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Frost-bunker-0.1.1-debug-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-bunker-0.1.1-debug-arm64.apk.sha256"
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/$APK_NAME"
+          # Checksum by bare file name so `sha256sum -c` works after download.
+          cd "$GITHUB_WORKSPACE/dist"
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK_NAME"
+          sha256sum "$APK_NAME" > "$APK_NAME.sha256"
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Frost-bunker-Debug-Test-ARM64
           path: |
-            dist/Frost-bunker-0.1.1-debug-arm64.apk
-            dist/Frost-bunker-0.1.1-debug-arm64.apk.sha256
+            dist/Frost-bunker-${{ env.APP_VERSION }}-debug-arm64.apk
+            dist/Frost-bunker-${{ env.APP_VERSION }}-debug-arm64.apk.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -131,18 +166,58 @@ jobs:
           set -euo pipefail
           unset KEYSTORE_FILE KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD
           ./gradlew assembleRelease --no-daemon
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          AAPT="$BUILD_TOOLS/aapt"
+          [ -x "$AAPT" ] || AAPT="$BUILD_TOOLS/aapt2"
+          test -x "$AAPT"
+          APK_NAME="Frost-bunker-$APP_VERSION-arm64-unsigned.apk"
           mkdir -p "$GITHUB_WORKSPACE/unsigned"
           mapfile -t APKS < <(find app/build/outputs/apk/release -type f -name '*-unsigned.apk' | sort)
           test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk"
-          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk"; then
+          cp "${APKS[0]}" "$GITHUB_WORKSPACE/unsigned/$APK_NAME"
+          cd "$GITHUB_WORKSPACE/unsigned"
+
+          # The APK must be positively unsigned, established from the file itself
+          # rather than from a tool's exit status (a missing or crashing
+          # apksigner also exits non-zero): no JAR (v1) signature entries and no
+          # APK Signing Block (v2/v3/v4) in front of the ZIP central directory.
+          python3 - "$APK_NAME" <<'PY'
+          import re, struct, sys, zipfile
+
+          path = sys.argv[1]
+          with zipfile.ZipFile(path) as apk:
+              names = apk.namelist()
+          signed_entries = [n for n in names if re.fullmatch(r"META-INF/[^/]+\.(RSA|DSA|EC|SF)", n, re.I)]
+          if signed_entries:
+              sys.exit(f"refusing release APK with JAR signature entries: {signed_entries}")
+
+          data = open(path, "rb").read()
+          eocd = data.rfind(b"PK\x05\x06")
+          if eocd < 0:
+              sys.exit("not a ZIP file: end of central directory not found")
+          (central_directory,) = struct.unpack_from("<I", data, eocd + 16)
+          if data[max(central_directory - 16, 0):central_directory] == b"APK Sig Block 42":
+              sys.exit("refusing release APK that carries an APK Signing Block")
+          print(f"{path}: no v1 signature entries and no APK Signing Block")
+          PY
+          # Belt and braces: Android's own verifier must not accept it either.
+          test -x "$BUILD_TOOLS/apksigner"
+          if "$BUILD_TOOLS/apksigner" verify --verbose "$APK_NAME"; then
             echo "Refusing to distribute an already signed release APK" >&2
             exit 1
           fi
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk" | grep "package: name='org.glowstr.igloomobile'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$GITHUB_WORKSPACE/unsigned/Frost-bunker-0.1.1-arm64-unsigned.apk" | grep -F "application-label:'Frost bunker'"
-          cd "$GITHUB_WORKSPACE/unsigned"
-          sha256sum Frost-bunker-0.1.1-arm64-unsigned.apk > Frost-bunker-0.1.1-arm64-unsigned.apk.sha256
+
+          # The package the owner is about to sign must be exactly this app.
+          BADGING="$("$AAPT" dump badging "$APK_NAME")"
+          grep -m1 '^package:' <<<"$BADGING"
+          grep -q "^package: name='$APP_ID' " <<<"$BADGING"
+          grep -Eq "^package: .* versionName='$APP_VERSION'( |\$)" <<<"$BADGING"
+          grep -qxF "application-label:'$APP_LABEL'" <<<"$BADGING"
+          if grep -q '^application-debuggable' <<<"$BADGING"; then
+            echo "Refusing to distribute a debuggable release APK" >&2
+            exit 1
+          fi
+          sha256sum "$APK_NAME" > "$APK_NAME.sha256"
 
       - name: Upload UNSIGNED Frost bunker release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
