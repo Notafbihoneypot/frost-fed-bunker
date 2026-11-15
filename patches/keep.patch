@@ -1,0 +1,247 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index da7eabd..1b8d2a5 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -519,9 +519,9 @@ dependencies = [
+ 
+ [[package]]
+ name = "async-utility"
+-version = "0.3.1"
++version = "0.3.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a34a3b57207a7a1007832416c3e4862378c8451b4e8e093e436f48c2d3d2c151"
++checksum = "188f83b9a198af8c336e505611edb00d6d2ac5c694241c5a4f9a12316938cfe9"
+ dependencies = [
+  "futures-util",
+  "gloo-timers",
+diff --git a/keep-mobile/src/lib.rs b/keep-mobile/src/lib.rs
+index 86a6058..4ec3dc1 100644
+--- a/keep-mobile/src/lib.rs
++++ b/keep-mobile/src/lib.rs
+@@ -207,7 +207,7 @@ pub fn generate_animated_frames(
+     bech32_data: String,
+     max_bytes: u32,
+ ) -> Result<Vec<String>, KeepMobileError> {
+-    let export = keep_core::frost::ShareExport::from_bech32(&bech32_data)
++    let export = keep_core::frost::ShareExport::parse(&bech32_data)
+         .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
+     let max = (max_bytes as usize).max(50);
+     export
+@@ -2213,6 +2213,149 @@ impl KeepMobile {
+         Self::build_generation_result(&shares, &passphrase)
+     }
+ 
++    /// Refresh an existing complete FROST share set offline.
++    ///
++    /// This is proactive share rotation: the group public key stays the same,
++    /// while every signing share changes. The full current share set is required
++    /// so no absent participant is silently orphaned.
++    pub fn frost_refresh_exports(
++        &self,
++        share_data: Vec<String>,
++        passphrases: Vec<String>,
++        name: String,
++        new_passphrase: String,
++    ) -> Result<FrostGenerationResult, KeepMobileError> {
++        let share_data: Vec<Zeroizing<String>> =
++            share_data.into_iter().map(Zeroizing::new).collect();
++        let passphrases: Vec<Zeroizing<String>> =
++            passphrases.into_iter().map(Zeroizing::new).collect();
++        let new_passphrase = Zeroizing::new(new_passphrase);
++
++        Self::validate_share_name(&name)?;
++        if share_data.is_empty() || share_data.len() != passphrases.len() {
++            return Err(KeepMobileError::InvalidShare {
++                msg: "Provide every share and one passphrase per share".into(),
++            });
++        }
++
++        let mut exports = Vec::with_capacity(share_data.len());
++        for data in &share_data {
++            let export = ShareExport::parse(data.as_str())
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            if export.ciphersuite != keep_core::frost::Ciphersuite::Secp256k1Tr {
++                return Err(KeepMobileError::InvalidShare {
++                    msg: "Only secp256k1 (Bitcoin/Nostr) shares are supported".into(),
++                });
++            }
++            exports.push(export);
++        }
++
++        // Each decryption below is a full Argon2id derivation, so reject an incomplete,
++        // mixed or duplicated set from the untrusted headers first; the decrypted
++        // shares are re-checked below.
++        let first_export = &exports[0];
++        let mut export_identifiers = std::collections::HashSet::new();
++        for export in &exports {
++            if exports.len() != export.total as usize
++                || !export.group_pubkey.eq_ignore_ascii_case(&first_export.group_pubkey)
++                || export.threshold != first_export.threshold
++                || !export_identifiers.insert(export.identifier)
++            {
++                return Err(KeepMobileError::InvalidShare {
++                    msg: "Share refresh needs every share of one FROST group exactly once".into(),
++                });
++            }
++        }
++
++        let mut shares = Vec::with_capacity(exports.len());
++        for (export, passphrase) in exports.iter().zip(passphrases.iter()) {
++            let share = export
++                .to_share(passphrase, &name)
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            shares.push(share);
++        }
++
++        let first = shares.first().ok_or_else(|| KeepMobileError::InvalidShare {
++            msg: "No shares supplied".into(),
++        })?;
++        let total = first.metadata.total_shares as usize;
++        if shares.len() != total {
++            return Err(KeepMobileError::InvalidShare {
++                msg: format!(
++                    "Share refresh requires the full set of {total} shares; got {}",
++                    shares.len()
++                ),
++            });
++        }
++
++        let group_pubkey = first.metadata.group_pubkey;
++        let threshold = first.metadata.threshold;
++        let mut identifiers = std::collections::HashSet::new();
++        for share in &shares {
++            if share.metadata.group_pubkey != group_pubkey
++                || share.metadata.threshold != threshold
++                || share.metadata.total_shares as usize != total
++            {
++                return Err(KeepMobileError::InvalidShare {
++                    msg: "Shares do not belong to the same FROST group".into(),
++                });
++            }
++            if !identifiers.insert(share.metadata.identifier) {
++                return Err(KeepMobileError::InvalidShare {
++                    msg: "Duplicate FROST share identifier".into(),
++                });
++            }
++        }
++
++        // Each export must carry an authenticated full member list matching the
++        // key packages supplied here, all on one polynomial through the group key.
++        // Legacy compact backups hold only their own verifying share, so their
++        // unauthenticated `total` could be edited to orphan a member: refuse them.
++        let mut verifying_shares = std::collections::BTreeMap::new();
++        for share in &shares {
++            let key_package = share
++                .key_package()
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            let bytes = key_package
++                .verifying_share()
++                .serialize()
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            let bytes: [u8; 33] = bytes
++                .as_slice()
++                .try_into()
++                .map_err(|_| KeepMobileError::InvalidShare {
++                    msg: "Invalid FROST verifying-share length".into(),
++                })?;
++            verifying_shares.insert(share.metadata.identifier, bytes);
++        }
++
++        for share in &shares {
++            let rebuilt = keep_core::frost::complete_verifying_shares(share, &verifying_shares)
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            let stored = share
++                .pubkey_package()
++                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
++            if stored.verifying_shares() != rebuilt.verifying_shares() {
++                return Err(KeepMobileError::InvalidShare {
++                    msg: "A share export does not authenticate the full member set; \
++                          re-export every share with this version, then rotate"
++                        .into(),
++                });
++            }
++        }
++
++        let (refreshed, _) = keep_core::frost::refresh_shares(&shares)
++            .map_err(|e| KeepMobileError::FrostError { msg: e.to_string() })?;
++
++        if refreshed.iter().any(|s| s.metadata.group_pubkey != group_pubkey) {
++            return Err(KeepMobileError::FrostError {
++                msg: "Group public key changed during refresh; refusing output".into(),
++            });
++        }
++
++        Self::build_generation_result(&refreshed, &new_passphrase)
++    }
++
+     /// FFI split, option B (§8): mint (or re-mint) this device's per-group DKG
+     /// signing subkey and return only its pubkey hex. The secret stays in Rust,
+     /// held in memory keyed by `group_name`, and never crosses the Kotlin
+@@ -16466,3 +16609,67 @@ mod stored_proxy_tests {
+         assert_ne!(generation(), before, "replacing an unreadable setting");
+     }
+ }
++
++#[cfg(test)]
++mod frost_refresh_export_tests {
++    use super::import_teardown_tests::MemStorage;
++    use super::*;
++
++    const OLD: &str = "old-rotation-pass-1";
++    const NEW: &str = "new-rotation-pass-2";
++
++    fn decrypt(result: &FrostGenerationResult, passphrase: &str) -> Vec<SharePackage> {
++        result
++            .shares
++            .iter()
++            .map(|s| ShareExport::parse(&s.export_data).unwrap().to_share(passphrase, "rot").unwrap())
++            .collect()
++    }
++
++    #[test]
++    fn refresh_keeps_group_key_replaces_every_share_and_refuses_bad_sets() {
++        let mobile = KeepMobile::new(Arc::new(MemStorage::default())).unwrap();
++        let original = mobile.frost_generate(2, 3, "rot".into(), OLD.into()).unwrap();
++        let old: Vec<String> = original.shares.iter().map(|s| s.export_data.clone()).collect();
++        let old_pass = |n: usize| vec![OLD.to_string(); n];
++
++        let refreshed = mobile
++            .frost_refresh_exports(old.clone(), old_pass(3), "rot".into(), NEW.into())
++            .unwrap();
++        assert_eq!(refreshed.group_pubkey, original.group_pubkey);
++
++        let (before, after) = (decrypt(&original, OLD), decrypt(&refreshed, NEW));
++        for (b, a) in before.iter().zip(&after) {
++            assert_eq!(b.metadata.identifier, a.metadata.identifier);
++            assert_ne!(
++                b.key_package().unwrap().signing_share().serialize(),
++                a.key_package().unwrap().signing_share().serialize()
++            );
++        }
++        keep_core::frost::sign_with_local_shares(&after[1..], b"rotated").unwrap();
++
++        let refuse = |shares: Vec<String>, passes: Vec<String>| {
++            mobile.frost_refresh_exports(shares, passes, "rot".into(), NEW.into()).is_err()
++        };
++        assert!(refuse(old[..2].to_vec(), old_pass(2)), "partial set");
++        assert!(refuse(vec![old[0].clone(), old[0].clone(), old[1].clone()], old_pass(3)), "duplicate");
++        let mixed = vec![old[0].clone(), old[1].clone(), refreshed.shares[2].export_data.clone()];
++        assert!(refuse(mixed, vec![OLD.into(), OLD.into(), NEW.into()]), "old and new shares mixed");
++        // Legacy exports carry no authenticated member list; even the full set is refused.
++        let legacy: Vec<String> = old
++            .iter()
++            .map(|s| {
++                let mut e = ShareExport::parse(s).unwrap();
++                e.encrypted_pubkey_package = None;
++                e.pubkey_nonce = None;
++                e.encrypted_verifying_shares = None;
++                e.verifying_shares_nonce = None;
++                e.to_json().unwrap()
++            })
++            .collect();
++        let err = mobile
++            .frost_refresh_exports(legacy, old_pass(3), "rot".into(), NEW.into())
++            .unwrap_err();
++        assert!(format!("{err:?}").contains("re-export"), "{err:?}");
++    }
++}

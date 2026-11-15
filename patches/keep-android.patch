@@ -1,0 +1,1970 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index b84c0f5..8a9f1b3 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -62,11 +62,11 @@ android {
+     ndkVersion = "29.0.14206865"
+ 
+     defaultConfig {
+-        applicationId = "io.privkey.keep"
++        applicationId = "org.glowstr.frostfedbunker"
+         minSdk = 33
+         targetSdk = 36
+-        versionCode = 32
+-        versionName = "1.4.0"
++        versionCode = 11
++        versionName = "0.4.0-frostr"
+ 
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+         // Reset the persisted kill switch to its disengaged baseline before every
+@@ -89,18 +89,6 @@ android {
+         includeInBundle = false
+     }
+ 
+-    signingConfigs {
+-        create("release") {
+-            val ksFile = System.getenv("KEYSTORE_FILE")
+-            if (ksFile != null && file(ksFile).exists()) {
+-                storeFile = file(ksFile)
+-                storePassword = System.getenv("KEYSTORE_PASSWORD")
+-                keyAlias = System.getenv("KEY_ALIAS")
+-                keyPassword = System.getenv("KEY_PASSWORD")
+-            }
+-        }
+-    }
+-
+     buildTypes {
+         release {
+             isMinifyEnabled = true
+@@ -108,14 +96,8 @@ android {
+                 getDefaultProguardFile("proguard-android-optimize.txt"),
+                 "proguard-rules.pro"
+             )
+-            // findByName (not getByName) so the build still works when F-Droid
+-            // strips the "release" signing config: fall back to debug signing.
+-            val releaseConfig = signingConfigs.findByName("release")
+-            signingConfig = if (releaseConfig?.storeFile != null) {
+-                releaseConfig
+-            } else {
+-                signingConfigs.getByName("debug")
+-            }
++            // Release stays unsigned; the owner signs it offline (OFFLINE-APK-SIGNING.md).
++            signingConfig = null
+         }
+     }
+ 
+@@ -157,7 +139,7 @@ android {
+         abi {
+             isEnable = !runningInstrumentedTests
+             reset()
+-            include("arm64-v8a", "x86_64")
++            include("arm64-v8a")
+             isUniversalApk = false
+         }
+     }
+@@ -280,9 +262,9 @@ dependencies {
+     // the modern activity stack, where that validator is gone.
+     implementation("androidx.fragment:fragment:1.9.1")
+     implementation("androidx.security:security-crypto:1.1.0")
+-    implementation("androidx.camera:camera-camera2:1.6.1")
+-    implementation("androidx.camera:camera-lifecycle:1.6.1")
+-    implementation("androidx.camera:camera-view:1.6.1")
++    implementation("androidx.camera:camera-camera2:1.6.2")
++    implementation("androidx.camera:camera-lifecycle:1.6.2")
++    implementation("androidx.camera:camera-view:1.6.2")
+     implementation("com.google.zxing:core:3.5.4")
+     implementation("net.java.dev.jna:jna:5.19.1@aar")
+ 
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index cab3f2a..70a76d5 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -10,7 +10,6 @@
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+ 
+     <uses-feature android:name="android.hardware.camera" android:required="false" />
+ 
+@@ -63,7 +62,7 @@
+ 
+         <provider
+             android:name=".nip55.Nip55ContentProvider"
+-            android:authorities="io.privkey.keep.GET_PUBLIC_KEY;io.privkey.keep.SIGN_EVENT;io.privkey.keep.NIP04_ENCRYPT;io.privkey.keep.NIP04_DECRYPT;io.privkey.keep.NIP44_ENCRYPT;io.privkey.keep.NIP44_DECRYPT;io.privkey.keep.DECRYPT_ZAP_EVENT;io.privkey.keep.NIP44_V3_ENCRYPT;io.privkey.keep.NIP44_V3_DECRYPT"
++            android:authorities="${applicationId}.GET_PUBLIC_KEY;${applicationId}.SIGN_EVENT;${applicationId}.NIP04_ENCRYPT;${applicationId}.NIP04_DECRYPT;${applicationId}.NIP44_ENCRYPT;${applicationId}.NIP44_DECRYPT;${applicationId}.DECRYPT_ZAP_EVENT;${applicationId}.NIP44_V3_ENCRYPT;${applicationId}.NIP44_V3_DECRYPT"
+             android:exported="true"
+             tools:ignore="ExportedContentProvider" />
+ 
+@@ -96,6 +95,12 @@
+             android:enabled="true"
+             android:exported="false" />
+ 
++
++        <receiver
++            android:name=".nip46.Nip46ApprovalActionReceiver"
++            android:enabled="true"
++            android:exported="false" />
++
+         <service
+             android:name=".nip46.BunkerService"
+             android:enabled="true"
+diff --git a/app/src/main/kotlin/io/privkey/keep/AccountActions.kt b/app/src/main/kotlin/io/privkey/keep/AccountActions.kt
+index 7e7bd74..b5d89c8 100644
+--- a/app/src/main/kotlin/io/privkey/keep/AccountActions.kt
++++ b/app/src/main/kotlin/io/privkey/keep/AccountActions.kt
+@@ -228,8 +228,8 @@ internal class AccountActions(
+             val activeKey = storage.getActiveShareKey()
+             val accounts = storage.listAllShares().map { it.toAccountInfo() }
+             val relayConfig = readRelayConfig(activeKey, keepMobile::getRelayConfig)
+-            val activeDidBackup = runCatching { keepMobile.getActiveShareMetadata()?.didBackup }
+-                .onFailure { Log.w("AccountActions", "getActiveShareMetadata failed: ${it::class.simpleName}") }
++            val activeDidBackup = runCatching { storage.getShareMetadata()?.didBackup }
++                .onFailure { Log.w("AccountActions", "getShareMetadata failed: ${it::class.simpleName}") }
+                 .getOrNull()
+             AccountState(
+                 hasShare, shareInfo, activeKey, accounts,
+diff --git a/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt b/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+index e9c55db..f0228e8 100644
+--- a/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
++++ b/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
+@@ -15,6 +15,19 @@ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.semantics.contentDescription
+ import androidx.compose.ui.semantics.semantics
+ import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.text.input.PasswordVisualTransformation
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import android.widget.Toast
++import androidx.compose.foundation.text.KeyboardOptions
++import androidx.compose.ui.text.input.KeyboardType
++import io.privkey.keep.uniffi.FrostGenerationResult
++import io.privkey.keep.uniffi.KeepMobile
++import io.privkey.keep.uniffi.hexToNpub
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import java.util.Arrays
+ import androidx.compose.ui.unit.dp
+ import io.privkey.keep.uniffi.DkgConfig
+ import io.privkey.keep.uniffi.DkgParticipant
+@@ -295,6 +308,7 @@ private fun verifyRoster(roster: RosterPayload, ourPubkey: String): RosterVerifi
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+ fun CreateGroupScreen(
++    keepMobile: KeepMobile,
+     relays: List<String>,
+     onCreateGroup: (config: DkgConfig, name: String, cipher: Cipher) -> Unit,
+     onDkgBegin: (name: String) -> String,
+@@ -305,7 +319,7 @@ fun CreateGroupScreen(
+     createGroupState: CreateGroupState
+ ) {
+     val context = LocalContext.current
+-    var isJoinMode by remember { mutableStateOf(false) }
++    var setupMode by remember { mutableStateOf(GroupSetupMode.DISTRIBUTED) }
+ 
+     val biometricInvalidatedMessage = stringResource(R.string.import_share_biometric_invalidated)
+     val biometricUnavailableMessage = stringResource(R.string.import_share_biometric_unavailable)
+@@ -357,27 +371,37 @@ fun CreateGroupScreen(
+ 
+         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+             SegmentedButton(
+-                selected = !isJoinMode,
+-                onClick = { isJoinMode = false },
+-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
++                selected = setupMode == GroupSetupMode.DISTRIBUTED,
++                onClick = { setupMode = GroupSetupMode.DISTRIBUTED },
++                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+             ) {
+                 Text(stringResource(R.string.create_group_mode_start))
+             }
+             SegmentedButton(
+-                selected = isJoinMode,
+-                onClick = { isJoinMode = true },
+-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
++                selected = setupMode == GroupSetupMode.JOIN,
++                onClick = { setupMode = GroupSetupMode.JOIN },
++                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+             ) {
+                 Text(stringResource(R.string.create_group_mode_join))
+             }
++            SegmentedButton(
++                selected = setupMode == GroupSetupMode.OFFLINE,
++                onClick = { setupMode = GroupSetupMode.OFFLINE },
++                shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
++            ) {
++                Text(stringResource(R.string.igloo_offline_tab))
++            }
+         }
+ 
+         Spacer(modifier = Modifier.height(24.dp))
+ 
+-        if (isJoinMode) {
+-            JoinGroupMode(onDkgBegin = onDkgBegin, runDkg = runDkg)
+-        } else {
+-            StartGroupMode(relays = relays, onDkgBegin = onDkgBegin, runDkg = runDkg)
++        when (setupMode) {
++            GroupSetupMode.DISTRIBUTED ->
++                StartGroupMode(relays = relays, onDkgBegin = onDkgBegin, runDkg = runDkg)
++            GroupSetupMode.JOIN ->
++                JoinGroupMode(onDkgBegin = onDkgBegin, runDkg = runDkg)
++            GroupSetupMode.OFFLINE ->
++                OfflineGroupMode(keepMobile = keepMobile)
+         }
+ 
+         Spacer(modifier = Modifier.height(24.dp))
+@@ -388,6 +412,733 @@ fun CreateGroupScreen(
+     }
+ }
+ 
++
++
++private fun splitNonBlankLines(value: String): List<String> =
++    value.lines().map { it.trim() }.filter { it.isNotEmpty() }
++
++@Composable
++private fun OfflineRefreshMode(
++    keepMobile: KeepMobile,
++    onBack: () -> Unit
++) {
++    val scope = rememberCoroutineScope()
++    var sharesText by remember { mutableStateOf("") }
++    val context = LocalContext.current
++    val newPassphrase = remember { SecurePassphrase() }
++    val confirmPassphrase = remember { SecurePassphrase() }
++    var oldPassphrasesDisplay by remember { mutableStateOf("") }
++    var newPassphraseDisplay by remember { mutableStateOf("") }
++    var confirmPassphraseDisplay by remember { mutableStateOf("") }
++    var rotating by remember { mutableStateOf(false) }
++    var result by remember { mutableStateOf<FrostGenerationResult?>(null) }
++    var selectedShare by remember { mutableIntStateOf(0) }
++    var error by remember { mutableStateOf<String?>(null) }
++    var pendingSaveData by remember { mutableStateOf<String?>(null) }
++
++    val saveRotatedShare = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.CreateDocument("text/plain")
++    ) { uri ->
++        val data = pendingSaveData
++        pendingSaveData = null
++        if (uri != null && !data.isNullOrEmpty()) {
++            scope.launch {
++                val saved = withContext(Dispatchers.IO) {
++                    runCatching {
++                        context.contentResolver.openOutputStream(uri, "wt")
++                            ?.bufferedWriter(Charsets.UTF_8)
++                            ?.use { writer ->
++                                writer.write(data)
++                                writer.newLine()
++                            }
++                            ?: error("Unable to open selected document")
++                    }.isSuccess
++                }
++                Toast.makeText(
++                    context,
++                    if (saved) "Rotated FROST share saved" else "Failed to save rotated FROST share",
++                    Toast.LENGTH_SHORT
++                ).show()
++            }
++        }
++    }
++
++    DisposableEffect(Unit) {
++        onDispose {
++            newPassphrase.clear()
++            confirmPassphrase.clear()
++            oldPassphrasesDisplay = ""
++            sharesText = ""
++            pendingSaveData = null
++            result = null
++        }
++    }
++
++    val refreshed = result
++    if (refreshed != null) {
++        val share = refreshed.shares[selectedShare]
++        val frames by produceState<List<String>?>(initialValue = null, key1 = share.exportData) {
++            value = withContext(Dispatchers.Default) {
++                runCatching {
++                    io.privkey.keep.uniffi.generateAnimatedFrames(share.exportData, 600u)
++                }.getOrElse { listOf(share.exportData) }
++            }
++        }
++
++        StatusCard(
++            text = "FROST share rotation complete. The account npub is unchanged. Replace every old share with the matching new share; old and new shares must not be mixed.",
++            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
++            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++        NpubDisplay(hexToNpub(refreshed.groupPubkey) ?: refreshed.groupPubkey)
++        Spacer(modifier = Modifier.height(16.dp))
++        Text(
++            "New share " + (selectedShare + 1) + " of " + refreshed.shares.size,
++            style = MaterialTheme.typography.titleMedium
++        )
++        Spacer(modifier = Modifier.height(12.dp))
++
++        val readyFrames = frames
++        if (readyFrames == null) {
++            CircularProgressIndicator()
++        } else if (readyFrames.size > 1) {
++            AnimatedQrCodeDisplay(
++                frames = readyFrames,
++                label = "Rotated FROST share " + share.shareIndex,
++                fullData = share.exportData
++            )
++        } else {
++            QrCodeDisplay(
++                data = share.exportData,
++                label = "Rotated FROST share " + share.shareIndex
++            )
++        }
++
++        Spacer(modifier = Modifier.height(12.dp))
++        Button(
++            onClick = {
++                pendingSaveData = share.exportData
++                saveRotatedShare.launch(
++                    "Frost-Fed-Bunker-rotated-share-" + share.shareIndex + ".kshare"
++                )
++            },
++            modifier = Modifier.fillMaxWidth()
++        ) {
++            Text("Save this rotated share")
++        }
++
++        Spacer(modifier = Modifier.height(16.dp))
++        Row(
++            modifier = Modifier.fillMaxWidth(),
++            horizontalArrangement = Arrangement.spacedBy(12.dp)
++        ) {
++            OutlinedButton(
++                onClick = { if (selectedShare > 0) selectedShare-- },
++                enabled = selectedShare > 0,
++                modifier = Modifier.weight(1f)
++            ) {
++                Text("Previous")
++            }
++            Button(
++                onClick = { if (selectedShare < refreshed.shares.lastIndex) selectedShare++ },
++                enabled = selectedShare < refreshed.shares.lastIndex,
++                modifier = Modifier.weight(1f)
++            ) {
++                Text("Next")
++            }
++        }
++
++        Spacer(modifier = Modifier.height(8.dp))
++        OutlinedButton(
++            onClick = onBack,
++            modifier = Modifier.fillMaxWidth()
++        ) {
++            Text("Done")
++        }
++        return
++    }
++
++    StatusCard(
++        text = "Offline share refresh keeps the same npub but replaces every FROST share. You must provide the COMPLETE current share set. Do this only on a trusted offline device. This does not revoke a full old signing threshold already compromised; in that case create a new FROST identity/npub.",
++        containerColor = MaterialTheme.colorScheme.errorContainer,
++        contentColor = MaterialTheme.colorScheme.onErrorContainer
++    )
++    Spacer(modifier = Modifier.height(16.dp))
++
++    OutlinedTextField(
++        value = sharesText,
++        onValueChange = {
++            sharesText = it
++            error = null
++        },
++        label = { Text("Current encrypted shares (one kshare1... per line)") },
++        modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
++        minLines = 5
++    )
++
++    Spacer(modifier = Modifier.height(12.dp))
++
++    OutlinedTextField(
++        value = oldPassphrasesDisplay,
++        onValueChange = {
++            oldPassphrasesDisplay = it
++            error = null
++        },
++        label = { Text("Current share passphrase(s)") },
++        supportingText = {
++            Text("Enter one passphrase to use for every share, or one passphrase per line in the same order as the shares.")
++        },
++        visualTransformation = PasswordVisualTransformation(),
++        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
++        minLines = 1,
++        maxLines = 8,
++        modifier = Modifier.fillMaxWidth()
++    )
++
++    Spacer(modifier = Modifier.height(12.dp))
++
++    OutlinedTextField(
++        value = newPassphraseDisplay,
++        onValueChange = {
++            newPassphrase.update(it)
++            if (newPassphrase.length == it.length) newPassphraseDisplay = it
++            error = null
++        },
++        label = { Text("New share passphrase") },
++        visualTransformation = PasswordVisualTransformation(),
++        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
++        singleLine = true,
++        modifier = Modifier.fillMaxWidth()
++    )
++
++    Spacer(modifier = Modifier.height(12.dp))
++
++    OutlinedTextField(
++        value = confirmPassphraseDisplay,
++        onValueChange = {
++            confirmPassphrase.update(it)
++            if (confirmPassphrase.length == it.length) confirmPassphraseDisplay = it
++            error = null
++        },
++        label = { Text("Confirm new passphrase") },
++        visualTransformation = PasswordVisualTransformation(),
++        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
++        singleLine = true,
++        modifier = Modifier.fillMaxWidth()
++    )
++
++    error?.let {
++        Spacer(modifier = Modifier.height(8.dp))
++        Text(
++            it,
++            color = MaterialTheme.colorScheme.error,
++            style = MaterialTheme.typography.bodySmall
++        )
++    }
++
++    Spacer(modifier = Modifier.height(16.dp))
++
++    Button(
++        onClick = {
++            val shares = splitNonBlankLines(sharesText)
++            val enteredPassphrases = oldPassphrasesDisplay.lines()
++                .filter { it.isNotEmpty() }
++            val currentPassphrases = when {
++                enteredPassphrases.size == 1 -> List(shares.size) { enteredPassphrases.first() }
++                enteredPassphrases.size == shares.size -> enteredPassphrases
++                else -> emptyList()
++            }
++            when {
++                shares.size < 2 -> error = "Provide the complete FROST share set"
++                enteredPassphrases.isEmpty() -> error = "Current passphrase is required"
++                currentPassphrases.size != shares.size ->
++                    error = "Enter one current passphrase for all shares, or exactly one passphrase per share"
++                newPassphrase.length < 15 -> error = "Use a new passphrase of at least 15 characters"
++                calculatePassphraseStrength(newPassphrase) == PassphraseStrength.WEAK ->
++                    error = "New passphrase is too weak"
++                !newPassphrase.contentEquals(confirmPassphrase) -> error = "New passphrases do not match"
++                else -> {
++                    val oldChars = currentPassphrases.map { it.toCharArray() }
++                    val newChars = newPassphrase.toCharArray()
++                    rotating = true
++                    scope.launch {
++                        try {
++                            val refreshedResult = withContext(Dispatchers.Default) {
++                                keepMobile.frostRefreshExports(
++                                    shares,
++                                    oldChars.map { String(it) },
++                                    "Refreshed FROST",
++                                    String(newChars)
++                                )
++                            }
++                            result = refreshedResult
++                            selectedShare = 0
++                            sharesText = ""
++                            oldPassphrasesDisplay = ""
++                            newPassphrase.clear()
++                            confirmPassphrase.clear()
++                            newPassphraseDisplay = ""
++                            confirmPassphraseDisplay = ""
++                        } catch (e: Exception) {
++                            if (BuildConfig.DEBUG) {
++                                Log.e("OfflineFrost", "Share refresh failed", e)
++                            }
++                            error = "FROST share rotation failed. Verify that every current share and passphrase is correct."
++                        } finally {
++                            oldChars.forEach { Arrays.fill(it, '\u0000') }
++                            Arrays.fill(newChars, '\u0000')
++                            rotating = false
++                        }
++                    }
++                }
++            }
++        },
++        enabled = !rotating,
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        if (rotating) {
++            CircularProgressIndicator(
++                modifier = Modifier.size(20.dp),
++                strokeWidth = 2.dp
++            )
++            Spacer(modifier = Modifier.width(8.dp))
++        }
++        Text("Rotate / refresh FROST shares")
++    }
++
++    Spacer(modifier = Modifier.height(8.dp))
++
++    OutlinedButton(
++        onClick = onBack,
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        Text("Back")
++    }
++}
++
++
++@Composable
++fun FrostShareRotationScreen(
++    keepMobile: KeepMobile,
++    onDismiss: () -> Unit
++) {
++    val context = LocalContext.current
++    DisposableEffect(context) {
++        setSecureScreen(context, true)
++        onDispose { setSecureScreen(context, false) }
++    }
++
++    Column(
++        modifier = Modifier
++            .fillMaxSize()
++            .statusBarsPadding()
++            .padding(24.dp)
++            .verticalScroll(rememberScrollState()),
++        horizontalAlignment = Alignment.CenterHorizontally
++    ) {
++        Text(
++            text = "Rotate FROST Shares",
++            style = MaterialTheme.typography.headlineMedium
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++        OfflineRefreshMode(keepMobile = keepMobile, onBack = onDismiss)
++    }
++}
++
++private enum class GroupSetupMode { DISTRIBUTED, JOIN, OFFLINE }
++
++@Composable
++private fun OfflineGroupMode(keepMobile: KeepMobile) {
++    val scope = rememberCoroutineScope()
++    val context = LocalContext.current
++    val passphrase = remember { SecurePassphrase() }
++    val confirmPassphrase = remember { SecurePassphrase() }
++    var passphraseDisplay by remember { mutableStateOf("") }
++    var confirmPassphraseDisplay by remember { mutableStateOf("") }
++    var name by remember { mutableStateOf("Offline FROST") }
++    var threshold by remember { mutableIntStateOf(2) }
++    var participants by remember { mutableIntStateOf(3) }
++    var acknowledged by remember { mutableStateOf(false) }
++    var generating by remember { mutableStateOf(false) }
++    var generationResult by remember { mutableStateOf<FrostGenerationResult?>(null) }
++    var selectedShare by remember { mutableIntStateOf(0) }
++    var errorMessage by remember { mutableStateOf<String?>(null) }
++    var refreshMode by remember { mutableStateOf(false) }
++
++    // Generated exports are passphrase-encrypted by the FROST core.
++    // Use Android's user-selected document destination; never silently save key material.
++    var pendingGeneratedShare by remember { mutableStateOf<String?>(null) }
++    val saveGeneratedShare = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.CreateDocument("text/plain")
++    ) { uri ->
++        val data = pendingGeneratedShare
++        pendingGeneratedShare = null
++        if (uri != null && !data.isNullOrEmpty()) {
++            scope.launch {
++                val saved = withContext(Dispatchers.IO) {
++                    runCatching {
++                        context.contentResolver.openOutputStream(uri, "wt")
++                            ?.bufferedWriter(Charsets.UTF_8)
++                            ?.use { writer ->
++                                writer.write(data)
++                                writer.newLine()
++                            }
++                            ?: error("Unable to open selected document")
++                    }.isSuccess
++                }
++                Toast.makeText(
++                    context,
++                    if (saved) "Encrypted FROST share saved" else "Failed to save encrypted FROST share",
++                    Toast.LENGTH_SHORT
++                ).show()
++            }
++        }
++    }
++
++    if (refreshMode) {
++        OfflineRefreshMode(keepMobile = keepMobile, onBack = { refreshMode = false })
++        return
++    }
++
++    DisposableEffect(Unit) {
++        onDispose {
++            passphrase.clear()
++            confirmPassphrase.clear()
++            passphraseDisplay = ""
++            confirmPassphraseDisplay = ""
++            pendingGeneratedShare = null
++            generationResult = null
++        }
++    }
++
++    val generated = generationResult
++    if (generated != null) {
++        val share = generated.shares[selectedShare]
++        val frames by produceState<List<String>?>(initialValue = null, key1 = share.exportData) {
++            value = withContext(Dispatchers.Default) {
++                runCatching {
++                    io.privkey.keep.uniffi.generateAnimatedFrames(share.exportData, 600u)
++                }.getOrElse { listOf(share.exportData) }
++            }
++        }
++
++        StatusCard(
++            text = stringResource(R.string.igloo_offline_generated_warning),
++            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
++            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++
++        val npub = remember(generated.groupPubkey) {
++            hexToNpub(generated.groupPubkey) ?: generated.groupPubkey
++        }
++        NpubDisplay(npub)
++
++        Spacer(modifier = Modifier.height(16.dp))
++        Text(
++            stringResource(
++                R.string.igloo_offline_share_position,
++                selectedShare + 1,
++                generated.shares.size,
++                share.shareIndex.toInt()
++            ),
++            style = MaterialTheme.typography.titleMedium
++        )
++        Spacer(modifier = Modifier.height(12.dp))
++
++        val readyFrames = frames
++        if (readyFrames == null) {
++            CircularProgressIndicator()
++        } else if (readyFrames.size > 1) {
++            AnimatedQrCodeDisplay(
++                frames = readyFrames,
++                label = stringResource(R.string.igloo_offline_share_qr, share.shareIndex.toInt()),
++                fullData = share.exportData
++            )
++        } else {
++            QrCodeDisplay(
++                data = share.exportData,
++                label = stringResource(R.string.igloo_offline_share_qr, share.shareIndex.toInt())
++            )
++        }
++
++        Spacer(modifier = Modifier.height(12.dp))
++        Button(
++            onClick = {
++                pendingGeneratedShare = share.exportData
++                saveGeneratedShare.launch(
++                    "Frost-Fed-Bunker-generated-share-" + share.shareIndex + ".kshare"
++                )
++            },
++            modifier = Modifier.fillMaxWidth()
++        ) {
++            Text("Save this encrypted share")
++        }
++        Spacer(modifier = Modifier.height(8.dp))
++        Text(
++            text = "Save each share separately to trusted offline storage; avoid cloud folders. Verify your backup before finishing.",
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.onSurfaceVariant
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++        Text(
++            stringResource(R.string.igloo_offline_transfer_hint),
++            style = MaterialTheme.typography.bodySmall,
++            color = MaterialTheme.colorScheme.onSurfaceVariant
++        )
++        Spacer(modifier = Modifier.height(16.dp))
++
++        Row(
++            modifier = Modifier.fillMaxWidth(),
++            horizontalArrangement = Arrangement.spacedBy(12.dp)
++        ) {
++            OutlinedButton(
++                onClick = { if (selectedShare > 0) selectedShare-- },
++                enabled = selectedShare > 0,
++                modifier = Modifier.weight(1f)
++            ) {
++                Text(stringResource(R.string.igloo_offline_previous))
++            }
++            Button(
++                onClick = {
++                    if (selectedShare < generated.shares.lastIndex) selectedShare++
++                },
++                enabled = selectedShare < generated.shares.lastIndex,
++                modifier = Modifier.weight(1f)
++            ) {
++                Text(stringResource(R.string.igloo_offline_next))
++            }
++        }
++
++        Spacer(modifier = Modifier.height(8.dp))
++        OutlinedButton(
++            onClick = {
++                generationResult = null
++                selectedShare = 0
++                acknowledged = false
++            },
++            modifier = Modifier.fillMaxWidth()
++        ) {
++            Text(stringResource(R.string.igloo_offline_finish))
++        }
++        return
++    }
++
++    OutlinedButton(
++        onClick = { refreshMode = true },
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        Text("Rotate / refresh existing FROST shares")
++    }
++    Spacer(modifier = Modifier.height(16.dp))
++
++    StatusCard(
++        text = stringResource(R.string.igloo_offline_warning),
++        containerColor = MaterialTheme.colorScheme.errorContainer,
++        contentColor = MaterialTheme.colorScheme.onErrorContainer
++    )
++    Spacer(modifier = Modifier.height(16.dp))
++
++    OutlinedTextField(
++        value = name,
++        onValueChange = { if (it.length <= MAX_ACCOUNT_NAME_LENGTH) name = it },
++        label = { Text(stringResource(R.string.create_group_name_label)) },
++        modifier = Modifier.fillMaxWidth(),
++        singleLine = true
++    )
++
++    Spacer(modifier = Modifier.height(16.dp))
++
++    Text(
++        text = "Quick threshold presets",
++        style = MaterialTheme.typography.titleSmall,
++        modifier = Modifier.fillMaxWidth()
++    )
++    Spacer(modifier = Modifier.height(8.dp))
++    Row(
++        modifier = Modifier.fillMaxWidth(),
++        horizontalArrangement = Arrangement.spacedBy(8.dp)
++    ) {
++        FilterChip(
++            selected = threshold == 2 && participants == 3,
++            onClick = {
++                threshold = 2
++                participants = 3
++            },
++            label = { Text("2 of 3") },
++            modifier = Modifier.weight(1f)
++        )
++        FilterChip(
++            selected = threshold == 3 && participants == 5,
++            onClick = {
++                threshold = 3
++                participants = 5
++            },
++            label = { Text("3 of 5") },
++            modifier = Modifier.weight(1f)
++        )
++    }
++    Text(
++        text = "Offline mode will generate all selected shares on this device so you can distribute them afterward.",
++        style = MaterialTheme.typography.bodySmall,
++        color = MaterialTheme.colorScheme.onSurfaceVariant,
++        modifier = Modifier.fillMaxWidth()
++    )
++
++    Spacer(modifier = Modifier.height(16.dp))
++
++    Stepper(
++        label = stringResource(R.string.create_group_threshold_label, threshold),
++        decrementDescription = stringResource(R.string.create_group_threshold_decrement),
++        incrementDescription = stringResource(R.string.create_group_threshold_increment),
++        onDecrement = { if (threshold > 2) threshold-- },
++        onIncrement = { if (threshold < participants) threshold++ },
++        canDecrement = threshold > 2,
++        canIncrement = threshold < participants
++    )
++
++    Spacer(modifier = Modifier.height(8.dp))
++
++    Stepper(
++        label = stringResource(R.string.create_group_participants_label, participants),
++        decrementDescription = stringResource(R.string.create_group_participants_decrement),
++        incrementDescription = stringResource(R.string.create_group_participants_increment),
++        onDecrement = {
++            if (participants > 2) {
++                participants--
++                if (threshold > participants) threshold = participants
++            }
++        },
++        onIncrement = { if (participants < 8) participants++ },
++        canDecrement = participants > 2,
++        canIncrement = participants < 8
++    )
++
++    Spacer(modifier = Modifier.height(16.dp))
++
++    OutlinedTextField(
++        value = passphraseDisplay,
++        onValueChange = {
++            passphrase.update(it)
++            if (passphrase.length == it.length) passphraseDisplay = it
++            errorMessage = null
++        },
++        label = { Text(stringResource(R.string.igloo_offline_passphrase)) },
++        visualTransformation = PasswordVisualTransformation(),
++        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
++        singleLine = true,
++        modifier = Modifier.fillMaxWidth()
++    )
++
++    Spacer(modifier = Modifier.height(12.dp))
++
++    OutlinedTextField(
++        value = confirmPassphraseDisplay,
++        onValueChange = {
++            confirmPassphrase.update(it)
++            if (confirmPassphrase.length == it.length) confirmPassphraseDisplay = it
++            errorMessage = null
++        },
++        label = { Text(stringResource(R.string.igloo_offline_confirm_passphrase)) },
++        visualTransformation = PasswordVisualTransformation(),
++        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
++        singleLine = true,
++        modifier = Modifier.fillMaxWidth(),
++        isError = confirmPassphrase.length > 0 && !passphrase.contentEquals(confirmPassphrase)
++    )
++
++    Spacer(modifier = Modifier.height(12.dp))
++
++    Row(
++        verticalAlignment = Alignment.CenterVertically,
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        Checkbox(
++            checked = acknowledged,
++            onCheckedChange = { acknowledged = it }
++        )
++        Text(
++            stringResource(R.string.igloo_offline_acknowledge),
++            style = MaterialTheme.typography.bodySmall,
++            modifier = Modifier.weight(1f)
++        )
++    }
++
++    if (errorMessage != null) {
++        Spacer(modifier = Modifier.height(8.dp))
++        Text(
++            errorMessage!!,
++            color = MaterialTheme.colorScheme.error,
++            style = MaterialTheme.typography.bodySmall
++        )
++    }
++
++    Spacer(modifier = Modifier.height(16.dp))
++
++    Button(
++        onClick = {
++            when {
++                name.isBlank() -> errorMessage = "Name is required"
++                passphrase.length < 15 -> errorMessage = "Use a passphrase of at least 15 characters"
++                calculatePassphraseStrength(passphrase) == PassphraseStrength.WEAK ->
++                    errorMessage = "Passphrase is too weak"
++                !passphrase.contentEquals(confirmPassphrase) -> errorMessage = "Passphrases do not match"
++                !acknowledged -> errorMessage = "Confirm the offline-generation warning first"
++                else -> {
++                    val passphraseChars = passphrase.toCharArray()
++                    generating = true
++                    errorMessage = null
++                    scope.launch {
++                        try {
++                            val result = withContext(Dispatchers.Default) {
++                                keepMobile.frostGenerate(
++                                    threshold.toUShort(),
++                                    participants.toUShort(),
++                                    name.trim(),
++                                    String(passphraseChars)
++                                )
++                            }
++                            generationResult = result
++                            selectedShare = 0
++                            passphrase.clear()
++                            confirmPassphrase.clear()
++                            passphraseDisplay = ""
++                            confirmPassphraseDisplay = ""
++                        } catch (e: Exception) {
++                            if (BuildConfig.DEBUG) {
++                                Log.e("OfflineFrost", "Trusted-dealer generation failed: ${e::class.simpleName}")
++                            }
++                            errorMessage = "Offline share generation failed"
++                        } finally {
++                            Arrays.fill(passphraseChars, '\u0000')
++                            generating = false
++                        }
++                    }
++                }
++            }
++        },
++        enabled = !generating,
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        if (generating) {
++            CircularProgressIndicator(
++                modifier = Modifier.size(20.dp),
++                strokeWidth = 2.dp
++            )
++            Spacer(modifier = Modifier.width(8.dp))
++        }
++        Text(stringResource(R.string.igloo_offline_generate))
++    }
++
++    Spacer(modifier = Modifier.height(8.dp))
++    Text(
++        stringResource(R.string.igloo_offline_recommendation),
++        style = MaterialTheme.typography.bodySmall,
++        color = MaterialTheme.colorScheme.onSurfaceVariant
++    )
++}
++
+ private enum class CoordPhase { Form, Collect, Ready }
+ 
+ @Composable
+@@ -454,6 +1205,44 @@ private fun StartGroupMode(
+ 
+             Spacer(modifier = Modifier.height(16.dp))
+ 
++            Text(
++                text = "Quick threshold presets",
++                style = MaterialTheme.typography.titleSmall,
++                modifier = Modifier.fillMaxWidth()
++            )
++            Spacer(modifier = Modifier.height(8.dp))
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(8.dp)
++            ) {
++                FilterChip(
++                    selected = threshold == 2 && participants == 3,
++                    onClick = {
++                        threshold = 2
++                        participants = 3
++                    },
++                    label = { Text("2 of 3") },
++                    modifier = Modifier.weight(1f)
++                )
++                FilterChip(
++                    selected = threshold == 3 && participants == 5,
++                    onClick = {
++                        threshold = 3
++                        participants = 5
++                    },
++                    label = { Text("3 of 5") },
++                    modifier = Modifier.weight(1f)
++                )
++            }
++            Text(
++                text = "Pick a preset or use the controls below for a custom group.",
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                modifier = Modifier.fillMaxWidth()
++            )
++
++            Spacer(modifier = Modifier.height(16.dp))
++
+             Stepper(
+                 label = stringResource(R.string.create_group_threshold_label, threshold),
+                 decrementDescription = stringResource(R.string.create_group_threshold_decrement),
+diff --git a/app/src/main/kotlin/io/privkey/keep/ExportLogsScreen.kt b/app/src/main/kotlin/io/privkey/keep/ExportLogsScreen.kt
+index d4f3e80..3fdd6ea 100644
+--- a/app/src/main/kotlin/io/privkey/keep/ExportLogsScreen.kt
++++ b/app/src/main/kotlin/io/privkey/keep/ExportLogsScreen.kt
+@@ -2,6 +2,7 @@ package io.privkey.keep
+ 
+ import io.privkey.keep.ui.components.KeepCard
+ import android.content.ActivityNotFoundException
++import android.content.Context
+ import android.content.Intent
+ import android.os.Build
+ import android.util.Log
+@@ -109,6 +110,7 @@ fun ExportLogsScreen(
+             try {
+                 val content = withContext(Dispatchers.IO) {
+                     buildExportContent(
++                        context = context,
+                         keepMobile = keepMobile,
+                         storage = storage,
+                         signingAuditLog = signingAuditLog,
+@@ -265,6 +267,7 @@ fun ExportLogsScreen(
+ }
+ 
+ private suspend fun buildExportContent(
++    context: Context,
+     keepMobile: KeepMobile,
+     storage: AndroidKeystoreStorage,
+     signingAuditLog: SigningAuditLog?,
+@@ -329,6 +332,13 @@ private suspend fun buildExportContent(
+         }
+     }
+ 
++    val lastCrash = runCatching {
++        File(context.filesDir, "last_crash.txt")
++            .takeIf { it.isFile }
++            ?.readText(Charsets.UTF_8)
++            ?.take(100_000)
++    }.getOrNull()
++
+     return buildString {
+         appendLine("=== Keep Diagnostics ===")
+         appendLine("Exported: $timestamp")
+@@ -375,5 +385,12 @@ private suspend fun buildExportContent(
+             }
+             if (text.isBlank()) appendLine("(no activity)") else appendLine(text)
+         }
++        appendLine()
++        appendLine("=== Last Uncaught Crash ===")
++        if (lastCrash.isNullOrBlank()) {
++            appendLine("(none captured)")
++        } else {
++            appendLine(lastCrash)
++        }
+     }
+ }
+diff --git a/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt b/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
+index 6e44cc5..7924365 100644
+--- a/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
++++ b/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
+@@ -2,6 +2,8 @@ package io.privkey.keep
+ 
+ import android.util.Log
+ import android.widget.Toast
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.rememberScrollState
+ import androidx.compose.foundation.text.KeyboardOptions
+@@ -65,7 +67,7 @@ private fun ErrorCard(message: String) {
+     )
+ }
+ 
+-private enum class PassphraseStrength {
++internal enum class PassphraseStrength {
+     WEAK,
+     FAIR,
+     GOOD,
+@@ -88,7 +90,7 @@ private fun PassphraseStrength.color() = when (this) {
+     PassphraseStrength.STRONG -> MaterialTheme.colorScheme.primary
+ }
+ 
+-private fun calculatePassphraseStrength(passphrase: SecurePassphrase): PassphraseStrength {
++internal fun calculatePassphraseStrength(passphrase: SecurePassphrase): PassphraseStrength {
+     if (passphrase.length < MIN_PASSPHRASE_LENGTH) return PassphraseStrength.WEAK
+ 
+     var score = 0
+@@ -250,6 +252,8 @@ fun ExportShareScreen(
+     val lifecycleOwner = LocalLifecycleOwner.current
+     var exportJob by remember { mutableStateOf<Job?>(null) }
+     val sessionCanceled = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
++    var documentPickerActive by remember { mutableStateOf(false) }
++    val documentPickerActiveState = rememberUpdatedState(documentPickerActive)
+     val minLengthMessage = stringResource(R.string.export_share_min_length, MIN_PASSPHRASE_LENGTH)
+     val passphrasesMismatchMessage = stringResource(R.string.export_share_passphrases_mismatch)
+     val tooWeakMessage = stringResource(R.string.export_share_too_weak)
+@@ -260,6 +264,35 @@ fun ExportShareScreen(
+     val authCancelledMessage = stringResource(R.string.export_share_auth_cancelled)
+     val initFailedMessage = stringResource(R.string.export_share_init_failed)
+ 
++    val saveShareLauncher = rememberLauncherForActivityResult(
++        contract = ActivityResultContracts.CreateDocument("text/plain")
++    ) { uri ->
++        documentPickerActive = false
++        if (uri != null) {
++            val exportData = (exportState as? ExportState.Success)?.data.orEmpty()
++            if (exportData.isNotEmpty()) {
++                coroutineScope.launch {
++                    val saved = withContext(Dispatchers.IO) {
++                        runCatching {
++                            context.contentResolver.openOutputStream(uri, "wt")
++                                ?.bufferedWriter(Charsets.UTF_8)
++                                ?.use { writer ->
++                                    writer.write(exportData)
++                                    writer.newLine()
++                                }
++                                ?: error("Unable to open selected document")
++                        }.isSuccess
++                    }
++                    Toast.makeText(
++                        context,
++                        if (saved) "Encrypted FROST share saved" else "Failed to save encrypted FROST share",
++                        Toast.LENGTH_SHORT
++                    ).show()
++                }
++            }
++        }
++    }
++
+     DisposableEffect(lifecycleOwner) {
+         setSecureScreen(context, true)
+ 
+@@ -276,7 +309,10 @@ fun ExportShareScreen(
+         }
+ 
+         val observer = LifecycleEventObserver { _, event ->
+-            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
++            if (
++                (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) &&
++                !documentPickerActiveState.value
++            ) {
+                 clearSensitiveData()
+             }
+         }
+@@ -441,6 +477,14 @@ fun ExportShareScreen(
+                 ExportSuccessContent(
+                     data = state.data,
+                     frames = state.frames,
++                    onSaveToFile = {
++                        documentPickerActive = true
++                        val safeName = shareInfo.name
++                            .replace(Regex("[^A-Za-z0-9._-]"), "_")
++                            .take(48)
++                            .ifBlank { "share" }
++                        saveShareLauncher.launch("Frost-Fed-Bunker-" + safeName + ".kshare")
++                    },
+                     onDismiss = onDismiss
+                 )
+             }
+@@ -452,6 +496,7 @@ fun ExportShareScreen(
+ private fun ExportSuccessContent(
+     data: String,
+     frames: List<String>,
++    onSaveToFile: () -> Unit,
+     onDismiss: () -> Unit
+ ) {
+     val context = LocalContext.current
+@@ -478,6 +523,15 @@ private fun ExportSuccessContent(
+ 
+     Spacer(modifier = Modifier.height(24.dp))
+ 
++    Button(
++        onClick = onSaveToFile,
++        modifier = Modifier.fillMaxWidth()
++    ) {
++        Text("Save encrypted share to file")
++    }
++
++    Spacer(modifier = Modifier.height(8.dp))
++
+     OutlinedButton(
+         onClick = { showClipboardWarning = true },
+         modifier = Modifier.fillMaxWidth()
+diff --git a/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt b/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
+index 5bbf6dd..656f911 100644
+--- a/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
++++ b/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
+@@ -1,5 +1,8 @@
+ package io.privkey.keep
+ 
++import android.content.ClipboardManager
++import android.content.Context
++import android.widget.Toast
+ import android.security.keystore.KeyPermanentlyInvalidatedException
+ import android.util.Log
+ import io.privkey.keep.uniffi.isValidNsecFormat
+@@ -44,6 +47,10 @@ fun ImportNsecScreen(
+     val biometricInvalidatedMsg = stringResource(R.string.import_nsec_biometric_invalidated)
+     val biometricUnavailableMsg = stringResource(R.string.import_nsec_biometric_unavailable)
+     val cipherFailedMsg = stringResource(R.string.import_nsec_cipher_failed)
++    val pasteEmptyMsg = stringResource(R.string.import_nsec_paste_empty)
++    val pasteInvalidMsg = stringResource(R.string.import_nsec_paste_invalid)
++    val pasteTooLongMsg = stringResource(R.string.import_nsec_paste_too_long)
++    val pastedMsg = stringResource(R.string.import_nsec_pasted)
+ 
+     DisposableEffect(context) {
+         setSecureScreen(context, true)
+@@ -131,6 +138,40 @@ fun ImportNsecScreen(
+ 
+         Spacer(modifier = Modifier.height(8.dp))
+ 
++        Button(
++            onClick = {
++                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
++                val pasted = clipboard.primaryClip
++                    ?.takeIf { it.itemCount > 0 }
++                    ?.getItemAt(0)
++                    ?.text // never coerceToText: it would read an untrusted content URI
++                    ?.toString()
++                    ?.trim()
++                    .orEmpty()
++
++                when {
++                    pasted.isBlank() -> scanError = pasteEmptyMsg
++                    pasted.length > MAX_NSEC_LENGTH -> scanError = pasteTooLongMsg
++                    !isValidNsecFormat(pasted) -> scanError = pasteInvalidMsg
++                    else -> {
++                        scanError = null
++                        nsecData.update(pasted)
++                        nsecDisplay = pasted
++                        // Reduce the lifetime of the private key in the system clipboard
++                        // after a successful explicit paste.
++                        runCatching { clipboard.clearPrimaryClip() }
++                        Toast.makeText(context, pastedMsg, Toast.LENGTH_SHORT).show()
++                    }
++                }
++            },
++            modifier = Modifier.fillMaxWidth(),
++            enabled = isInputEnabled
++        ) {
++            Text(stringResource(R.string.import_nsec_paste))
++        }
++
++        Spacer(modifier = Modifier.height(8.dp))
++
+         OutlinedButton(
+             onClick = { showScanner = true },
+             modifier = Modifier.fillMaxWidth(),
+diff --git a/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt b/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
+index 48c86cc..4a87d3f 100644
+--- a/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
++++ b/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
+@@ -127,6 +127,7 @@ class KeepMobileApp : Application() {
+ 
+     override fun onCreate() {
+         super.onCreate()
++        installCrashCapture()
+         initializeKeepMobile()
+         initializePermissionStore()
+         initializeNetworkMonitoring()
+@@ -135,6 +136,31 @@ class KeepMobileApp : Application() {
+         initializeBunkerService()
+     }
+ 
++    private fun installCrashCapture() {
++        val previous = Thread.getDefaultUncaughtExceptionHandler()
++        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
++            runCatching {
++                val crashFile = java.io.File(filesDir, "last_crash.txt")
++                val report = buildString {
++                    appendLine("timestamp=" + java.time.Instant.now().toString())
++                    appendLine("thread=" + thread.name)
++                    appendLine("exception=" + throwable::class.java.name)
++                    appendLine()
++                    throwable.stackTrace.take(256).forEach { frame ->
++                        appendLine("at " + frame.toString())
++                    }
++                }
++                crashFile.writeText(report, Charsets.UTF_8)
++            }
++            if (previous != null) {
++                previous.uncaughtException(thread, throwable)
++            } else {
++                android.os.Process.killProcess(android.os.Process.myPid())
++                kotlin.system.exitProcess(10)
++            }
++        }
++    }
++
+     private fun initializeKeepMobile() {
+         runCatching {
+             val newStorage = AndroidKeystoreStorage(this)
+diff --git a/app/src/main/kotlin/io/privkey/keep/MainActivity.kt b/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
+index 5c323a3..b393f18 100644
+--- a/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
++++ b/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
+@@ -1,11 +1,15 @@
+ package io.privkey.keep
+ 
+ import android.app.KeyguardManager
++import android.Manifest
+ import android.content.Context
++import android.content.pm.PackageManager
++import android.os.Build
+ import android.content.Intent
+ import android.os.Bundle
+ import android.util.Log
+ import android.widget.Toast
++import androidx.activity.compose.BackHandler
+ import androidx.activity.compose.setContent
+ import androidx.biometric.BiometricPrompt
+ import androidx.compose.foundation.Image
+@@ -31,6 +35,7 @@ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.window.DialogProperties
+ import androidx.compose.ui.window.SecureFlagPolicy
+ import androidx.fragment.app.FragmentActivity
++import androidx.core.content.ContextCompat
+ import androidx.lifecycle.Lifecycle
+ import androidx.lifecycle.LifecycleEventObserver
+ import androidx.lifecycle.LifecycleOwner
+@@ -99,6 +104,18 @@ class MainActivity : FragmentActivity() {
+         super.onCreate(savedInstanceState)
+         if (savedInstanceState == null) approverRequested = intent?.action == ApproverNotifier.ACTION_SHOW_APPROVER
+ 
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
++            ContextCompat.checkSelfPermission(
++                this,
++                Manifest.permission.POST_NOTIFICATIONS
++            ) != PackageManager.PERMISSION_GRANTED
++        ) {
++            requestPermissions(
++                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
++                4601
++            )
++        }
++
+         val app = application as? KeepMobileApp ?: run { finish(); return }
+         biometricHelper = BiometricHelper(this, app.getBiometricTimeoutStore())
+         val keepMobile = app.getKeepMobile()
+@@ -506,6 +523,7 @@ fun MainScreen(
+     var showAccountSwitcher by remember { mutableStateOf(false) }
+     var showImportScreen by remember { mutableStateOf(false) }
+     var showCreateGroupScreen by remember { mutableStateOf(false) }
++    var showShareRotationScreen by remember { mutableStateOf(false) }
+     var showImportNsecScreen by remember { mutableStateOf(false) }
+     var showShareDetails by remember { mutableStateOf(false) }
+     var showExportScreen by remember { mutableStateOf(false) }
+@@ -709,6 +727,84 @@ fun MainScreen(
+         accountActions.setCurrentRelays(relays)
+     }
+ 
++    val hasTransientScreen =
++        showPinSetup ||
++        showSecuritySettings ||
++        showExportLogs ||
++        showEventLog ||
++        showBackupRestore ||
++        showRecoverNsec ||
++        showSignPolicyScreen ||
++        showRelayAuthWhitelistScreen ||
++        showPermissionsScreen ||
++        showHistoryScreen ||
++        showExportScreen ||
++        showExportNcryptsecScreen ||
++        showShareDetails ||
++        showConnectedApps ||
++        showBunkerScreen ||
++        showWalletDescriptorScreen ||
++        showAccountSwitcher ||
++        showImportScreen ||
++        showCreateGroupScreen ||
++        showShareRotationScreen ||
++        showImportNsecScreen ||
++        showCreateAccountScreen ||
++        showSeedWordsScreen ||
++        showMnemonicRecoveryScreen
++
++    BackHandler(enabled = hasTransientScreen) {
++        when {
++            showPinSetup -> showPinSetup = false
++            showSecuritySettings -> showSecuritySettings = false
++            showExportLogs -> showExportLogs = false
++            showEventLog -> showEventLog = false
++            showBackupRestore -> showBackupRestore = false
++            showRecoverNsec -> showRecoverNsec = false
++            showSignPolicyScreen -> showSignPolicyScreen = false
++            showRelayAuthWhitelistScreen -> showRelayAuthWhitelistScreen = false
++            showPermissionsScreen -> showPermissionsScreen = false
++            showHistoryScreen -> showHistoryScreen = false
++            showExportScreen -> showExportScreen = false
++            showExportNcryptsecScreen -> showExportNcryptsecScreen = false
++            showShareDetails -> showShareDetails = false
++            showConnectedApps && selectedAppPackage != null -> selectedAppPackage = null
++            showConnectedApps -> showConnectedApps = false
++            showBunkerScreen -> showBunkerScreen = false
++            showWalletDescriptorScreen -> showWalletDescriptorScreen = false
++            showAccountSwitcher -> showAccountSwitcher = false
++            showImportScreen -> {
++                showImportScreen = false
++                importState = ImportState.Idle
++            }
++            showCreateGroupScreen -> {
++                createGroupRun += 1
++                accountActions.cancelDkg()
++                showCreateGroupScreen = false
++                createGroupState = CreateGroupState.Idle
++            }
++            showShareRotationScreen -> showShareRotationScreen = false
++            showImportNsecScreen -> {
++                showImportNsecScreen = false
++                importState = ImportState.Idle
++            }
++            showCreateAccountScreen -> {
++                showCreateAccountScreen = false
++                importState = ImportState.Idle
++            }
++            showSeedWordsScreen -> {
++                seedWordsRequestToken += 1
++                seedWordsLoading = false
++                seedWordsData.clear()
++                showSeedWordsScreen = false
++            }
++            showMnemonicRecoveryScreen -> {
++                showMnemonicRecoveryScreen = false
++                importState = ImportState.Idle
++            }
++        }
++    }
++
+     suspend fun refreshCertificatePins() {
+         certificatePins = withContext(Dispatchers.IO) { keepMobile.getCertificatePinsCompat() }
+     }
+@@ -802,7 +898,7 @@ fun MainScreen(
+                             .onFailure { if (it is CancellationException) throw it }
+                             .getOrDefault(descriptorCount)
+                     } else 0
+-                    val db = runCatching { keepMobile.getActiveShareMetadata()?.didBackup }
++                    val db = runCatching { storage.getShareMetadata()?.didBackup }
+                         .onFailure { if (it is CancellationException) throw it }
+                         .getOrNull()
+                     // Marker-only read, no biometric; safe to poll.
+@@ -1422,6 +1518,14 @@ fun MainScreen(
+         return
+     }
+ 
++    if (showShareRotationScreen) {
++        FrostShareRotationScreen(
++            keepMobile = keepMobile,
++            onDismiss = { showShareRotationScreen = false }
++        )
++        return
++    }
++
+     if (showCreateGroupScreen) {
+         when (groupCreationGate(pendingDkgCheckComplete, pendingDkgShare != null, pendingDkgUnreadable)) {
+             GroupCreationGate.WAIT -> {
+@@ -1458,6 +1562,7 @@ fun MainScreen(
+             }
+         }
+         CreateGroupScreen(
++            keepMobile = keepMobile,
+             relays = groupRelays,
+             onCreateGroup = { config, name, cipher ->
+                 // Tag each run; a callback from a dismissed run is dropped so it
+@@ -2116,6 +2221,7 @@ fun MainScreen(
+                     onCreateAccount = { showCreateAccountScreen = true },
+                     onRecoverMnemonic = { showMnemonicRecoveryScreen = true },
+                     onRecoverNsec = { showRecoverNsec = true },
++                    onRotateShares = { showShareRotationScreen = true },
+                     onCreateGroup = { showCreateGroupScreen = true }
+                 )
+             }
+@@ -2529,6 +2635,7 @@ private fun AccountTab(
+     onCreateAccount: () -> Unit,
+     onRecoverMnemonic: () -> Unit,
+     onRecoverNsec: () -> Unit,
++    onRotateShares: () -> Unit,
+     onCreateGroup: () -> Unit
+ ) {
+     Column(
+@@ -2608,6 +2715,13 @@ private fun AccountTab(
+                         }
+                     }
+                     if (shareInfo.threshold >= 2u.toUShort()) {
++                        Spacer(modifier = Modifier.height(8.dp))
++                        Button(
++                            onClick = onRotateShares,
++                            modifier = Modifier.fillMaxWidth()
++                        ) {
++                            Text("Rotate FROST Shares")
++                        }
+                         Spacer(modifier = Modifier.height(8.dp))
+                         OutlinedButton(
+                             onClick = onRecoverNsec,
+diff --git a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+index 8b48a99..cae0456 100644
+--- a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
++++ b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+@@ -114,6 +114,7 @@ fun BunkerScreen(
+     val context = LocalContext.current
+     val scope = rememberCoroutineScope()
+     var relays by remember { mutableStateOf<List<String>>(emptyList()) }
++    var savingRelays by remember { mutableStateOf(false) }
+     var authorizedClients by remember { mutableStateOf<Set<String>>(emptySet()) }
+     var showAddDialog by remember { mutableStateOf(false) }
+     var showRevokeAllDialog by remember { mutableStateOf(false) }
+@@ -151,14 +152,36 @@ fun BunkerScreen(
+     }
+ 
+     fun saveBunkerRelays(updated: List<String>) {
++        if (savingRelays) return
++        savingRelays = true
+         scope.launch {
+-            runCatching {
+-                withContext(Dispatchers.IO) {
+-                    val config = keepMobile.getRelayConfig(null)
+-                    keepMobile.saveRelayConfig(null, RelayConfigInfo(config.frostRelays, config.profileRelays, updated))
++            try {
++                // Leaving the screen mid-save must not skip the live-bunker
++                // restart/stop, or it keeps serving the old relays.
++                withContext(NonCancellable) {
++                    withContext(Dispatchers.IO) {
++                        val config = keepMobile.getRelayConfig(null)
++                        keepMobile.saveRelayConfig(
++                            null, RelayConfigInfo(config.frostRelays, config.profileRelays, updated)
++                        )
++                        if (updated.isEmpty() && isEnabled) {
++                            BunkerConfigStore.update(keepMobile) { current ->
++                                BunkerConfigInfo(false, current.authorizedClients)
++                            }
++                        }
++                    }
++                    // Only show persisted relays as available for bunker startup.
++                    relays = updated
++                    if (updated.isEmpty() && isEnabled) {
++                        onToggleBunker(false)
++                    } else if (isEnabled) {
++                        BunkerService.restartAfterRelayConfigChange()
++                    }
+                 }
+-            }.onFailure {
++            } catch (e: Exception) {
+                 Toast.makeText(context, toastSaveRelayFailed, Toast.LENGTH_SHORT).show()
++            } finally {
++                savingRelays = false
+             }
+         }
+     }
+@@ -184,6 +207,14 @@ fun BunkerScreen(
+         horizontalAlignment = Alignment.CenterHorizontally
+     ) {
+         StatusBadge(bunkerStatus)
++        if (bunkerStatus == BunkerStatus.ERROR) {
++            Text(
++                "Bunker connection failed. Check the NIP-46 relay list and network, " +
++                    "then turn the bunker off and on to retry.",
++                color = MaterialTheme.colorScheme.error,
++                style = MaterialTheme.typography.bodySmall
++            )
++        }
+ 
+         Spacer(modifier = Modifier.height(16.dp))
+ 
+@@ -224,8 +255,9 @@ fun BunkerScreen(
+ 
+         BunkerToggleCard(
+             enabled = isEnabled,
+-            canEnable = relays.isNotEmpty(),
++            canEnable = relays.isNotEmpty() && !savingRelays,
+             onToggle = { enabled ->
++                if (savingRelays) return@BunkerToggleCard
+                 if (enabled && relays.isEmpty()) {
+                     Toast.makeText(context, toastAddRelayFirst, Toast.LENGTH_SHORT).show()
+                     return@BunkerToggleCard
+@@ -254,7 +286,6 @@ fun BunkerScreen(
+             onAddClick = { showAddDialog = true },
+             onRemove = { relay ->
+                 val updated = relays - relay
+-                relays = updated
+                 saveBunkerRelays(updated)
+             }
+         )
+@@ -273,7 +304,6 @@ fun BunkerScreen(
+         AddBunkerRelayDialog(
+             relays = relays,
+             onRelaysUpdated = { updated ->
+-                relays = updated
+                 saveBunkerRelays(updated)
+             },
+             onDismiss = { showAddDialog = false }
+@@ -339,6 +369,7 @@ fun BunkerScreen(
+                             BunkerService.rotateBunkerCredentials(keepMobile)
+                         }
+                     }.onSuccess {
++                        authorizedClients = emptySet()
+                         Toast.makeText(context, toastUrlRotated, Toast.LENGTH_SHORT).show()
+                     }.onFailure {
+                         if (it is CancellationException) throw it
+diff --git a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+index f4101b5..28760d8 100644
+--- a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
++++ b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+@@ -358,10 +358,29 @@ class BunkerService : Service() {
+          * Rotate the bunker credentials whether or not the service is running.
+          */
+         internal suspend fun rotateBunkerCredentials(keepMobile: io.privkey.keep.uniffi.KeepMobile) {
+-            current()?.takeIf { it.serving }?.let { return it.rotateBunkerUrl() }
+-            BunkerHandler(keepMobile).use { it.rotateBunkerCredentials() }
+-            // A service that began starting meanwhile was stopped by the rotation.
+-            current()?.restartIfServing()
++            val service = current()?.takeIf { it.serving }
++            if (service != null) {
++                service.rotateBunkerUrl()
++            } else {
++                BunkerHandler(keepMobile).use { it.rotateBunkerCredentials() }
++            }
++
++            // The transport key changed, so grants from the old scope are not
++            // restored. Clear the display/config client list too so the UI does
++            // not imply that those clients remain paired.
++            // A failure is reported to the caller after the cache is cleared and
++            // the service restarted, so the UI never claims a stale list is gone.
++            val cleared = runCatching {
++                BunkerConfigStore.update(keepMobile) { config ->
++                    io.privkey.keep.uniffi.BunkerConfigInfo(config.enabled, emptyList())
++                }
++            }
++            current()?.authorizedClientsCache?.clear()
++
++            // A service that began starting meanwhile was stopped by the
++            // rotation. The serving path already starts itself with the new URL.
++            if (service == null) current()?.restartIfServing()
++            cleared.getOrThrow()
+         }
+ 
+         /**
+@@ -390,6 +409,10 @@ class BunkerService : Service() {
+             current()?.restartIfServing()
+         }
+ 
++        internal fun restartAfterRelayConfigChange() {
++            current()?.restartIfServing()
++        }
++
+         /** Starts an enabled bunker that is not running once the core has a node to serve. */
+         internal fun startAfterNodeBuilt(context: Context, keepMobile: io.privkey.keep.uniffi.KeepMobile) {
+             // A live service's own start, and its retries, own the bunker.
+@@ -542,7 +565,14 @@ class BunkerService : Service() {
+         authorizedClientsCache.clear()
+         bunkerConfig.authorizedClients.forEach { authorizedClientsCache.add(it.lowercase()) }
+ 
+-        startForeground(NOTIFICATION_ID, createNotification(isActive = false))
++        try {
++            startForeground(NOTIFICATION_ID, createNotification(isActive = false))
++        } catch (e: Exception) {
++            if (BuildConfig.DEBUG) Log.e(TAG, "Unable to enter foreground mode", e)
++            _status.value = BunkerStatus.ERROR
++            stopSelf()
++            return START_NOT_STICKY
++        }
+ 
+         // Stored keys that will not decrypt fail the open rather than being minted over,
+         // and this runs on the main thread after startForeground, so an uncaught failure
+@@ -585,7 +615,17 @@ class BunkerService : Service() {
+                         false
+                     }
+                 }
+-                if (shouldRestart) startBunker(keepMobile, relays)
++                if (shouldRestart) {
++                    val latestRelays = runCatching {
++                        keepMobile.getRelayConfig(null).bunkerRelays
++                    }.getOrDefault(emptyList())
++                    if (latestRelays.isNotEmpty()) {
++                        startBunker(keepMobile, latestRelays)
++                    } else {
++                        _bunkerUrl.value = null
++                        _status.value = BunkerStatus.ERROR
++                    }
++                }
+             }
+         }
+         networkManager?.register()
+@@ -978,13 +1018,17 @@ class BunkerService : Service() {
+             request.eventContent?.let { putExtra(Nip46ApprovalActivity.EXTRA_EVENT_CONTENT, it) }
+             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+         }
+-        runCatching { startActivity(intent) }
+         postApprovalNotification(requestId, request, intent)
+     }
+ 
+     private fun postApprovalNotification(requestId: String, request: BunkerApprovalRequest, intent: Intent) {
+         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+-            != PackageManager.PERMISSION_GRANTED) return
++            != PackageManager.PERMISSION_GRANTED) {
++            // No notification can be shown: open the approval screen directly
++            // rather than let every request silently time out.
++            runCatching { startActivity(intent) }
++            return
++        }
+         val notificationId = approvalNotificationId(requestId)
+         val contentIntent = PendingIntent.getActivity(
+             this,
+@@ -992,6 +1036,17 @@ class BunkerService : Service() {
+             intent,
+             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+         )
++        // Approval must still pass through Nip46ApprovalActivity so the
++        // biometric/Keystore gate cannot be bypassed from a notification action.
++        val approveIntent = contentIntent
++        val rejectIntent = PendingIntent.getBroadcast(
++            this,
++            notificationId * 2 + 2,
++            Intent(this, Nip46ApprovalActionReceiver::class.java)
++                .setAction(Nip46ApprovalActionReceiver.ACTION_REJECT)
++                .putExtra(Nip46ApprovalActionReceiver.EXTRA_REQUEST_ID, requestId),
++            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
++        )
+         val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
+         val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
+         val publicVersion = NotificationCompat.Builder(this, APPROVAL_CHANNEL_ID)
+@@ -1008,7 +1063,16 @@ class BunkerService : Service() {
+             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+             .setPublicVersion(publicVersion)
+             .setContentIntent(contentIntent)
+-            .setFullScreenIntent(contentIntent, true)
++            .addAction(
++                R.drawable.ic_notification,
++                getString(R.string.cosign_approve),
++                approveIntent
++            )
++            .addAction(
++                R.drawable.ic_notification,
++                getString(R.string.cosign_reject),
++                rejectIntent
++            )
+             .setAutoCancel(true)
+             .setTimeoutAfter(APPROVAL_TIMEOUT_MS)
+             .build()
+@@ -1110,7 +1174,11 @@ class BunkerService : Service() {
+ 
+     private fun updateNotification(isActive: Boolean) {
+         val manager = getSystemService(NotificationManager::class.java)
+-        manager.notify(NOTIFICATION_ID, createNotification(isActive))
++        runCatching {
++            manager.notify(NOTIFICATION_ID, createNotification(isActive))
++        }.onFailure {
++            if (BuildConfig.DEBUG) Log.e(TAG, "Failed to update bunker notification", it)
++        }
+     }
+ }
+ 
+diff --git a/app/src/main/kotlin/io/privkey/keep/nip46/Nip46ApprovalActionReceiver.kt b/app/src/main/kotlin/io/privkey/keep/nip46/Nip46ApprovalActionReceiver.kt
+new file mode 100644
+index 0000000..ec28cd0
+--- /dev/null
++++ b/app/src/main/kotlin/io/privkey/keep/nip46/Nip46ApprovalActionReceiver.kt
+@@ -0,0 +1,19 @@
++package io.privkey.keep.nip46
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++
++class Nip46ApprovalActionReceiver : BroadcastReceiver() {
++    override fun onReceive(context: Context, intent: Intent) {
++        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return
++        if (intent.action == ACTION_REJECT) {
++            BunkerService.respondToApproval(requestId, false)
++        }
++    }
++
++    companion object {
++        const val ACTION_REJECT = "org.glowstr.frostfedbunker.NIP46_REJECT"
++        const val EXTRA_REQUEST_ID = "nip46_approval_request_id"
++    }
++}
+diff --git a/app/src/main/kotlin/io/privkey/keep/nip55/Nip55ContentProvider.kt b/app/src/main/kotlin/io/privkey/keep/nip55/Nip55ContentProvider.kt
+index 54557ff..e19c91c 100644
+--- a/app/src/main/kotlin/io/privkey/keep/nip55/Nip55ContentProvider.kt
++++ b/app/src/main/kotlin/io/privkey/keep/nip55/Nip55ContentProvider.kt
+@@ -64,15 +64,16 @@ internal class HandlerTimedOut : Exception("Handler call timed out")
+ class Nip55ContentProvider : ContentProvider() {
+     companion object {
+         private const val TAG = "Nip55ContentProvider"
+-        private const val AUTHORITY_GET_PUBLIC_KEY = "io.privkey.keep.GET_PUBLIC_KEY"
+-        private const val AUTHORITY_SIGN_EVENT = "io.privkey.keep.SIGN_EVENT"
+-        private const val AUTHORITY_NIP04_ENCRYPT = "io.privkey.keep.NIP04_ENCRYPT"
+-        private const val AUTHORITY_NIP04_DECRYPT = "io.privkey.keep.NIP04_DECRYPT"
+-        private const val AUTHORITY_NIP44_ENCRYPT = "io.privkey.keep.NIP44_ENCRYPT"
+-        private const val AUTHORITY_NIP44_DECRYPT = "io.privkey.keep.NIP44_DECRYPT"
+-        private const val AUTHORITY_NIP44_V3_ENCRYPT = "io.privkey.keep.NIP44_V3_ENCRYPT"
+-        private const val AUTHORITY_NIP44_V3_DECRYPT = "io.privkey.keep.NIP44_V3_DECRYPT"
+-        private const val AUTHORITY_DECRYPT_ZAP_EVENT = "io.privkey.keep.DECRYPT_ZAP_EVENT"
++        // Must match the manifest's ${applicationId}.* authorities, not upstream's io.privkey.keep.
++        private const val AUTHORITY_GET_PUBLIC_KEY = "${BuildConfig.APPLICATION_ID}.GET_PUBLIC_KEY"
++        private const val AUTHORITY_SIGN_EVENT = "${BuildConfig.APPLICATION_ID}.SIGN_EVENT"
++        private const val AUTHORITY_NIP04_ENCRYPT = "${BuildConfig.APPLICATION_ID}.NIP04_ENCRYPT"
++        private const val AUTHORITY_NIP04_DECRYPT = "${BuildConfig.APPLICATION_ID}.NIP04_DECRYPT"
++        private const val AUTHORITY_NIP44_ENCRYPT = "${BuildConfig.APPLICATION_ID}.NIP44_ENCRYPT"
++        private const val AUTHORITY_NIP44_DECRYPT = "${BuildConfig.APPLICATION_ID}.NIP44_DECRYPT"
++        private const val AUTHORITY_NIP44_V3_ENCRYPT = "${BuildConfig.APPLICATION_ID}.NIP44_V3_ENCRYPT"
++        private const val AUTHORITY_NIP44_V3_DECRYPT = "${BuildConfig.APPLICATION_ID}.NIP44_V3_DECRYPT"
++        private const val AUTHORITY_DECRYPT_ZAP_EVENT = "${BuildConfig.APPLICATION_ID}.DECRYPT_ZAP_EVENT"
+ 
+         private const val MAX_PUBKEY_LENGTH = 128
+         private const val MAX_CONTENT_LENGTH = 1024 * 1024
+@@ -785,7 +786,7 @@ class Nip55ContentProvider : ContentProvider() {
+     }
+ 
+     override fun getType(uri: Uri): String {
+-        val authority = uri.authority ?: "io.privkey.keep"
++        val authority = uri.authority ?: BuildConfig.APPLICATION_ID
+         return "vnd.android.cursor.item/vnd.$authority"
+     }
+ 
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 5ae34ba..6845b3c 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+-    <string name="app_name" translatable="false">Keep</string>
++    <string name="app_name" translatable="false">Frost Fed Bunker</string>
+     <string name="permission_duration_just_this_time">Just this time</string>
+     <string name="permission_duration_one_minute">For 1 minute</string>
+     <string name="permission_duration_five_minutes">For 5 minutes</string>
+@@ -47,7 +47,7 @@
+ 
+     <string name="foreground_service_channel_name">Background Service</string>
+     <string name="foreground_service_channel_description">Persistent notification for relay connections</string>
+-    <string name="foreground_service_title" translatable="false">Keep</string>
++    <string name="foreground_service_title" translatable="false">Frost Fed Bunker</string>
+     <string name="foreground_service_text">Relay connections active</string>
+ 
+     <string name="notification_channel_signing_requests">Signing Requests</string>
+@@ -72,7 +72,7 @@
+ 
+     <string name="bunker_service_channel_name">NIP-46 Bunker</string>
+     <string name="bunker_service_channel_description">Persistent notification for NIP-46 bunker mode</string>
+-    <string name="bunker_service_title" translatable="false">Keep Bunker</string>
++    <string name="bunker_service_title" translatable="false">Frost Fed Bunker Signer</string>
+     <string name="bunker_service_text_starting">Starting bunker...</string>
+     <string name="bunker_service_text_active">Bunker active - accepting remote signing requests</string>
+     <string name="bunker_approval_channel_name">Bunker approval requests</string>
+@@ -87,7 +87,7 @@
+     <string name="common_copy">Copy</string>
+ 
+     <!-- Biometric unlock -->
+-    <string name="biometric_unlock_title" translatable="false">Keep</string>
++    <string name="biometric_unlock_title" translatable="false">Frost Fed Bunker</string>
+     <string name="biometric_unlock_prompt">Authenticate to unlock</string>
+     <string name="biometric_unlock_lockout">Too many attempts. Try again shortly.</string>
+     <string name="biometric_unlock_lockout_permanent">Biometric locked. Use device PIN/password to unlock, then try again.</string>
+diff --git a/app/src/main/res/values/strings_backup.xml b/app/src/main/res/values/strings_backup.xml
+index 0f155de..daa5a7e 100644
+--- a/app/src/main/res/values/strings_backup.xml
++++ b/app/src/main/res/values/strings_backup.xml
+@@ -104,7 +104,12 @@
+     <string name="import_nsec_hide">Hide nsec</string>
+     <string name="import_nsec_show">Show nsec</string>
+     <string name="import_nsec_scan_qr">Scan QR Code</string>
+-    <string name="import_nsec_key_name_label">Key Name</string>
++    <string name="import_nsec_paste">Paste nsec</string>
++    <string name="import_nsec_paste_empty">Clipboard is empty</string>
++    <string name="import_nsec_paste_invalid">Clipboard does not contain a valid nsec1 private key</string>
++    <string name="import_nsec_paste_too_long">Clipboard content is too long to be an nsec</string>
++    <string name="import_nsec_pasted">nsec pasted securely; clipboard cleared</string>
++    <string name="import_nsec_key_name_label">Account Name</string>
+     <string name="import_nsec_imported">Key \'<xliff:g id="name" example="Mobile Key">%1$s</xliff:g>\' imported successfully</string>
+     <string name="import_nsec_biometric_invalidated">Biometric key invalidated. Please re-enroll biometrics.</string>
+     <string name="import_nsec_biometric_unavailable">Biometric authentication is unavailable</string>
+diff --git a/app/src/main/res/values/strings_connections.xml b/app/src/main/res/values/strings_connections.xml
+index 4df406c..60ef415 100644
+--- a/app/src/main/res/values/strings_connections.xml
++++ b/app/src/main/res/values/strings_connections.xml
+@@ -112,10 +112,10 @@
+     <string name="connections_bunker_revoke_client_confirm">Revoke</string>
+     <string name="connections_bunker_revoke_all_confirm">Revoke All</string>
+     <string name="connections_bunker_revoke_all_cancel">Cancel</string>
+-    <string name="connections_bunker_rotate_url_button">Rotate Bunker URL</string>
+-    <string name="connections_bunker_rotate_url_title">Rotate Bunker URL</string>
++    <string name="connections_bunker_rotate_url_button">Rotate NIP-46 connection keys</string>
++    <string name="connections_bunker_rotate_url_title">Rotate NIP-46 connection keys</string>
+     <string name="connections_bunker_rotate_url_text">This generates a new bunker URL and invalidates the current one. Anyone holding the old URL (including from a leak) can no longer connect or sign. All existing clients must re-pair with the new URL and approve again the actions they were allowed to remember.</string>
+-    <string name="connections_bunker_rotate_url_confirm">Rotate URL</string>
++    <string name="connections_bunker_rotate_url_confirm">Rotate keys</string>
+     <string name="connections_bunker_rotate_url_cancel">Cancel</string>
+     <string name="connections_bunker_toast_url_rotated">Bunker URL rotated. Re-pair your clients.</string>
+     <string name="connections_bunker_toast_rotate_url_failed">Failed to rotate bunker URL</string>
+diff --git a/app/src/main/res/values/strings_main.xml b/app/src/main/res/values/strings_main.xml
+index 09b52a3..e2d15d7 100644
+--- a/app/src/main/res/values/strings_main.xml
++++ b/app/src/main/res/values/strings_main.xml
+@@ -1,7 +1,7 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources tools:ignore="MissingTranslation" xmlns:tools="http://schemas.android.com/tools" xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+     <!-- MainActivity -->
+-    <string name="main_unlock_title">Unlock Keep</string>
++    <string name="main_unlock_title">Unlock Frost Fed Bunker</string>
+     <string name="main_unlock_subtitle">Authenticate to open app</string>
+     <string name="main_auth_failed">Authentication failed</string>
+     <string name="main_disable_kill_switch_title">Disable Kill Switch</string>
+@@ -23,8 +23,8 @@
+     <string name="main_import_nsec_subtitle">Authenticate to store key securely</string>
+     <string name="main_create_account_title">Create Account</string>
+     <string name="main_create_account_subtitle">Authenticate to store key securely</string>
+-    <string name="main_create_group_title">Create Signing Group</string>
+-    <string name="main_create_group_subtitle">Authenticate to store share securely</string>
++    <string name="main_create_group_title">Create FROST Identity</string>
++    <string name="main_create_group_subtitle">Create a threshold identity and store this device\'s share securely</string>
+     <string name="main_import_from_seed_words_title">Import from Seed Words</string>
+     <string name="main_import_from_seed_words_subtitle">Authenticate to store key securely</string>
+     <string name="main_confirm_backup_failed">Failed to confirm backup. Please try again.</string>
+@@ -33,7 +33,7 @@
+     <string name="main_init_app_failed">Failed to initialize</string>
+     <string name="main_connect_relays_title">Connect to Relays</string>
+     <string name="main_connect_relays_subtitle">Authenticate to connect</string>
+-    <string name="main_home_title">Keep</string>
++    <string name="main_home_title">Frost Fed Bunker</string>
+     <string name="main_pending_count"><xliff:g id="count" example="3">%1$d</xliff:g> pending</string>
+     <string name="main_apps_title">Apps</string>
+     <string name="main_apps_no_share">Import a key to manage connected apps</string>
+@@ -44,15 +44,15 @@
+     <string name="main_signing_history_title">Signing History</string>
+     <string name="main_signing_history_subtitle">View past signing requests and decisions</string>
+     <string name="main_view">View</string>
+-    <string name="main_keys_title">Keys</string>
++    <string name="main_keys_title">FROST Shares</string>
+     <string name="main_key_management">Key Management</string>
+     <string name="main_view_seed_words">View Seed Words</string>
+-    <string name="main_export_share_button">Export Share</string>
++    <string name="main_export_share_button">Export encrypted FROST share backup</string>
+     <string name="main_export_ncryptsec">Export Encrypted (NIP-49)</string>
+     <string name="main_import_share_button">Import Share</string>
+-    <string name="main_import_nsec_button">Import nsec</string>
++    <string name="main_import_nsec_button">Import / paste nsec</string>
+     <string name="main_recover_nsec_from_shares">Recover nsec from shares</string>
+-    <string name="main_create_account_button">Create Account</string>
++    <string name="main_create_account_button">Create single-key account (advanced)</string>
+     <string name="main_import_from_seed_words_button">Import from Seed Words</string>
+     <string name="main_backup_prompt_title">Back up your seed words</string>
+     <string name="main_backup_prompt_text">You haven\'t confirmed that you\'ve saved your seed words. Tap to view them and back up your account.</string>
+@@ -139,7 +139,7 @@
+     <string name="account_create">Create Account</string>
+     <string name="account_import_seed_words">Import from Seed Words</string>
+     <string name="account_import_frost_share">Import FROST Share</string>
+-    <string name="account_import_nsec">Import nsec</string>
++    <string name="account_import_nsec">Import / paste nsec</string>
+     <string name="account_delete_cannot_title">Cannot Delete Account</string>
+     <string name="account_delete_confirm_title">Delete Account?</string>
+     <string name="account_delete_only_text">You cannot delete your only account. Import another account first before removing this one.</string>
+diff --git a/app/src/main/res/values/strings_share.xml b/app/src/main/res/values/strings_share.xml
+index db59049..741141d 100644
+--- a/app/src/main/res/values/strings_share.xml
++++ b/app/src/main/res/values/strings_share.xml
+@@ -194,4 +194,20 @@
+     <string name="share_details_npub_placeholder">---</string>
+     <string name="share_details_export_qr">Export Share as QR</string>
+     <string name="share_details_copy_npub">Copy npub</string>
++
++    <!-- Igloo Mobile advanced offline trusted-dealer setup -->
++    <string name="igloo_offline_tab">Shares / Rotate</string>
++    <string name="igloo_offline_warning">Advanced setup: this phone temporarily generates the complete threshold key material and every share. Use an offline, trusted device. Distributed setup is safer because no single device ever holds the whole key.</string>
++    <string name="igloo_offline_passphrase">Share export passphrase</string>
++    <string name="igloo_offline_confirm_passphrase">Confirm passphrase</string>
++    <string name="igloo_offline_acknowledge">I understand this device temporarily creates all shares and must be trusted during generation.</string>
++    <string name="igloo_offline_generate">Generate encrypted shares offline</string>
++    <string name="igloo_offline_recommendation">Recommended: keep this phone offline during generation, transfer each encrypted share to a different signer, verify the backups, then remove any exported share copies left on the generating device.</string>
++    <string name="igloo_offline_generated_warning">Generation complete. Save every required share before leaving this screen. The same passphrase protects each exported share.</string>
++    <string name="igloo_offline_share_position">Share %1$d of %2$d · FROST index %3$d</string>
++    <string name="igloo_offline_share_qr">Encrypted FROST share %1$d</string>
++    <string name="igloo_offline_transfer_hint">Scan this QR on the signer that should hold this share. Animated QR frames cycle automatically when the encrypted export is too large for one QR.</string>
++    <string name="igloo_offline_previous">Previous share</string>
++    <string name="igloo_offline_next">Next share</string>
++    <string name="igloo_offline_finish">Clear generated shares from this screen</string>
+ </resources>
