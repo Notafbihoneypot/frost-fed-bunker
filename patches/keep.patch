@@ -15,7 +15,7 @@ index da7eabd..1b8d2a5 100644
   "futures-util",
   "gloo-timers",
 diff --git a/keep-mobile/src/lib.rs b/keep-mobile/src/lib.rs
-index 86a6058..4ec3dc1 100644
+index 86a6058..066a328 100644
 --- a/keep-mobile/src/lib.rs
 +++ b/keep-mobile/src/lib.rs
 @@ -207,7 +207,7 @@ pub fn generate_animated_frames(
@@ -27,7 +27,7 @@ index 86a6058..4ec3dc1 100644
          .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
      let max = (max_bytes as usize).max(50);
      export
-@@ -2213,6 +2213,149 @@ impl KeepMobile {
+@@ -2213,6 +2213,157 @@ impl KeepMobile {
          Self::build_generation_result(&shares, &passphrase)
      }
  
@@ -75,7 +75,9 @@ index 86a6058..4ec3dc1 100644
 +        let mut export_identifiers = std::collections::HashSet::new();
 +        for export in &exports {
 +            if exports.len() != export.total as usize
-+                || !export.group_pubkey.eq_ignore_ascii_case(&first_export.group_pubkey)
++                || !export
++                    .group_pubkey
++                    .eq_ignore_ascii_case(&first_export.group_pubkey)
 +                || export.threshold != first_export.threshold
 +                || !export_identifiers.insert(export.identifier)
 +            {
@@ -93,9 +95,11 @@ index 86a6058..4ec3dc1 100644
 +            shares.push(share);
 +        }
 +
-+        let first = shares.first().ok_or_else(|| KeepMobileError::InvalidShare {
-+            msg: "No shares supplied".into(),
-+        })?;
++        let first = shares
++            .first()
++            .ok_or_else(|| KeepMobileError::InvalidShare {
++                msg: "No shares supplied".into(),
++            })?;
 +        let total = first.metadata.total_shares as usize;
 +        if shares.len() != total {
 +            return Err(KeepMobileError::InvalidShare {
@@ -138,12 +142,13 @@ index 86a6058..4ec3dc1 100644
 +                .verifying_share()
 +                .serialize()
 +                .map_err(|e| KeepMobileError::InvalidShare { msg: e.to_string() })?;
-+            let bytes: [u8; 33] = bytes
-+                .as_slice()
-+                .try_into()
-+                .map_err(|_| KeepMobileError::InvalidShare {
-+                    msg: "Invalid FROST verifying-share length".into(),
-+                })?;
++            let bytes: [u8; 33] =
++                bytes
++                    .as_slice()
++                    .try_into()
++                    .map_err(|_| KeepMobileError::InvalidShare {
++                        msg: "Invalid FROST verifying-share length".into(),
++                    })?;
 +            verifying_shares.insert(share.metadata.identifier, bytes);
 +        }
 +
@@ -165,7 +170,10 @@ index 86a6058..4ec3dc1 100644
 +        let (refreshed, _) = keep_core::frost::refresh_shares(&shares)
 +            .map_err(|e| KeepMobileError::FrostError { msg: e.to_string() })?;
 +
-+        if refreshed.iter().any(|s| s.metadata.group_pubkey != group_pubkey) {
++        if refreshed
++            .iter()
++            .any(|s| s.metadata.group_pubkey != group_pubkey)
++        {
 +            return Err(KeepMobileError::FrostError {
 +                msg: "Group public key changed during refresh; refusing output".into(),
 +            });
@@ -177,10 +185,82 @@ index 86a6058..4ec3dc1 100644
      /// FFI split, option B (§8): mint (or re-mint) this device's per-group DKG
      /// signing subkey and return only its pubkey hex. The secret stays in Rust,
      /// held in memory keyed by `group_name`, and never crosses the Kotlin
-@@ -16466,3 +16609,67 @@ mod stored_proxy_tests {
+@@ -5435,6 +5586,9 @@ impl KeepMobile {
+                 .enabled;
+         let mut pins = persistence::load_cert_pins(&self.storage)?.unwrap_or_default();
+         let mut pins_changed = false;
++        // Why each skipped relay was skipped, so a start that ends with no
++        // usable relay can tell the user which one failed and how.
++        let mut skipped: Vec<String> = Vec::new();
+         for relay in relays {
+             // Strict mode: skip an un-pinned relay rather than aborting for the
+             // whole set. It is excluded from `verified_relays` below, and the
+@@ -5445,6 +5599,9 @@ impl KeepMobile {
+                     relay = %relay,
+                     "strict pinning: skipping relay with no provisioned pin"
+                 );
++                skipped.push(format!(
++                    "{relay}: no certificate pin (strict pinning is on)"
++                ));
+                 continue;
+             }
+             match keep_frost_net::verify_relay_certificate(relay, &pins, require_pinned, proxy)
+@@ -5467,7 +5624,10 @@ impl KeepMobile {
+                     return Err(e.into());
+                 }
+                 Err(e) => {
+-                    tracing::warn!(relay = %relay, error = %e, "TLS certificate verification failed, skipping relay");
++                    // Most often the relay is simply unreachable (DNS, TCP or
++                    // TLS handshake failure), not a certificate problem.
++                    tracing::warn!(relay = %relay, error = %e, "relay unreachable or TLS check failed, skipping relay");
++                    skipped.push(format!("{relay}: {e}"));
+                 }
+             }
+         }
+@@ -5491,10 +5651,9 @@ impl KeepMobile {
+             .collect();
+ 
+         if verified_relays.is_empty() {
+-            return Err(keep_frost_net::FrostNetError::Transport(
+-                "No relays passed TLS certificate verification".into(),
+-            )
+-            .into());
++            return Err(
++                keep_frost_net::FrostNetError::Transport(no_usable_relay_message(&skipped)).into(),
++            );
+         }
+ 
+         Ok(verified_relays)
+@@ -16466,3 +16625,151 @@ mod stored_proxy_tests {
          assert_ne!(generation(), before, "replacing an unreadable setting");
      }
  }
++
++/// User-facing reason a relay set had no usable relay, naming each relay that
++/// failed and why. Bounded so one bad relay list cannot produce a huge error.
++fn no_usable_relay_message(skipped: &[String]) -> String {
++    const MAX_LISTED: usize = 5;
++    const MAX_REASON_CHARS: usize = 160;
++    if skipped.is_empty() {
++        return "No relay could be reached".into();
++    }
++    let mut listed: Vec<String> = skipped
++        .iter()
++        .take(MAX_LISTED)
++        .map(|reason| {
++            if reason.chars().count() > MAX_REASON_CHARS {
++                let cut: String = reason.chars().take(MAX_REASON_CHARS).collect();
++                format!("{cut}…")
++            } else {
++                reason.clone()
++            }
++        })
++        .collect();
++    if skipped.len() > MAX_LISTED {
++        listed.push(format!("and {} more", skipped.len() - MAX_LISTED));
++    }
++    format!("No relay could be reached. {}", listed.join("; "))
++}
 +
 +#[cfg(test)]
 +mod frost_refresh_export_tests {
@@ -194,15 +274,26 @@ index 86a6058..4ec3dc1 100644
 +        result
 +            .shares
 +            .iter()
-+            .map(|s| ShareExport::parse(&s.export_data).unwrap().to_share(passphrase, "rot").unwrap())
++            .map(|s| {
++                ShareExport::parse(&s.export_data)
++                    .unwrap()
++                    .to_share(passphrase, "rot")
++                    .unwrap()
++            })
 +            .collect()
 +    }
 +
 +    #[test]
 +    fn refresh_keeps_group_key_replaces_every_share_and_refuses_bad_sets() {
 +        let mobile = KeepMobile::new(Arc::new(MemStorage::default())).unwrap();
-+        let original = mobile.frost_generate(2, 3, "rot".into(), OLD.into()).unwrap();
-+        let old: Vec<String> = original.shares.iter().map(|s| s.export_data.clone()).collect();
++        let original = mobile
++            .frost_generate(2, 3, "rot".into(), OLD.into())
++            .unwrap();
++        let old: Vec<String> = original
++            .shares
++            .iter()
++            .map(|s| s.export_data.clone())
++            .collect();
 +        let old_pass = |n: usize| vec![OLD.to_string(); n];
 +
 +        let refreshed = mobile
@@ -221,12 +312,27 @@ index 86a6058..4ec3dc1 100644
 +        keep_core::frost::sign_with_local_shares(&after[1..], b"rotated").unwrap();
 +
 +        let refuse = |shares: Vec<String>, passes: Vec<String>| {
-+            mobile.frost_refresh_exports(shares, passes, "rot".into(), NEW.into()).is_err()
++            mobile
++                .frost_refresh_exports(shares, passes, "rot".into(), NEW.into())
++                .is_err()
 +        };
 +        assert!(refuse(old[..2].to_vec(), old_pass(2)), "partial set");
-+        assert!(refuse(vec![old[0].clone(), old[0].clone(), old[1].clone()], old_pass(3)), "duplicate");
-+        let mixed = vec![old[0].clone(), old[1].clone(), refreshed.shares[2].export_data.clone()];
-+        assert!(refuse(mixed, vec![OLD.into(), OLD.into(), NEW.into()]), "old and new shares mixed");
++        assert!(
++            refuse(
++                vec![old[0].clone(), old[0].clone(), old[1].clone()],
++                old_pass(3)
++            ),
++            "duplicate"
++        );
++        let mixed = vec![
++            old[0].clone(),
++            old[1].clone(),
++            refreshed.shares[2].export_data.clone(),
++        ];
++        assert!(
++            refuse(mixed, vec![OLD.into(), OLD.into(), NEW.into()]),
++            "old and new shares mixed"
++        );
 +        // Legacy exports carry no authenticated member list; even the full set is refused.
 +        let legacy: Vec<String> = old
 +            .iter()
@@ -243,5 +349,37 @@ index 86a6058..4ec3dc1 100644
 +            .frost_refresh_exports(legacy, old_pass(3), "rot".into(), NEW.into())
 +            .unwrap_err();
 +        assert!(format!("{err:?}").contains("re-export"), "{err:?}");
++    }
++}
++
++#[cfg(test)]
++mod no_usable_relay_message_tests {
++    use super::no_usable_relay_message;
++
++    #[test]
++    fn names_each_failed_relay_and_its_reason() {
++        let msg = no_usable_relay_message(&[
++            "wss://relay.nsec.app/: Timeout: TCP connect to relay.nsec.app:443".into(),
++            "wss://relay.damus.io/: HTTP error: 503 Service Unavailable".into(),
++        ]);
++        assert!(msg.starts_with("No relay could be reached. "));
++        assert!(msg.contains("relay.nsec.app/: Timeout: TCP connect"));
++        assert!(msg.contains("relay.damus.io/: HTTP error: 503"));
++    }
++
++    #[test]
++    fn is_bounded() {
++        let long = "x".repeat(1000);
++        let many: Vec<String> = (0..9)
++            .map(|i| format!("wss://r{i}.example/: {long}"))
++            .collect();
++        let msg = no_usable_relay_message(&many);
++        assert!(msg.ends_with("and 4 more"));
++        assert!(msg.chars().count() < 5 * 170 + 80);
++    }
++
++    #[test]
++    fn has_a_reason_with_nothing_skipped() {
++        assert_eq!(no_usable_relay_message(&[]), "No relay could be reached");
 +    }
 +}

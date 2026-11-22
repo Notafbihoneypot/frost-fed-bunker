@@ -2,7 +2,7 @@
 
 Android package ID: org.glowstr.frostfedbunker (same as the 0.3.x test builds)
 Launcher name: Frost Fed Bunker
-Planned owner-signed release: 0.4.0-frostr (base versionCode 11; ARM64 split versionCode 112).
+Planned owner-signed release: 0.4.1-frostr (base versionCode 12; ARM64 split versionCode 122).
 
 **Never give CI, GitHub, a VPS, or another online device the offline Qubes signing key or keystore password.**
 
@@ -21,14 +21,14 @@ FROST shares are cryptographic signing authority; losing enough shares can perma
 ## 1. Build unsigned
 
 Run `./build-unsigned.sh`, or GitHub -> Actions -> Build Frost Fed Bunker Android (unsigned release). From CI download the artifact named Frost-Fed-Bunker-unsigned-release-arm64:
-- Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk
-- Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk.sha256
+- Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk
+- Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk.sha256
 
 The patches remove upstream Keep Android's fallback to signing release builds with a debug certificate. The build fails if the supposed unsigned APK is signed or debuggable.
 
 On the downloading machine:
 ~~~sh
-sha256sum -c Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk.sha256
+sha256sum -c Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk.sha256
 ~~~
 
 Transfer only those two files to the network-disabled signing qube and recheck SHA-256 there.
@@ -46,20 +46,20 @@ Sign in the offline qube (edit path and alias to match your existing key):
 ~~~sh
 umask 077
 cd /path/to/unsigned-frost-apk
-sha256sum -c Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk.sha256
+sha256sum -c Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk.sha256
 
-zipalign -P 16 -f -v 4 Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk Frost-Fed-Bunker-0.4.0-frostr-aligned.apk
+zipalign -P 16 -f -v 4 Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk Frost-Fed-Bunker-0.4.1-frostr-aligned.apk
 
 apksigner sign \
   --ks /offline/keys/frost-bunker-release.jks \
   --ks-key-alias MY_FROST_ALIAS \
-  --out Frost-Fed-Bunker-0.4.0-frostr.apk \
-  Frost-Fed-Bunker-0.4.0-frostr-aligned.apk
+  --out Frost-Fed-Bunker-0.4.1-frostr.apk \
+  Frost-Fed-Bunker-0.4.1-frostr-aligned.apk
 
-apksigner verify --verbose --print-certs Frost-Fed-Bunker-0.4.0-frostr.apk
-zipalign -c -P 16 -v 4 Frost-Fed-Bunker-0.4.0-frostr.apk
-aapt dump badging Frost-Fed-Bunker-0.4.0-frostr.apk | head -5
-sha256sum Frost-Fed-Bunker-0.4.0-frostr.apk > Frost-Fed-Bunker-0.4.0-frostr.apk.sha256
+apksigner verify --verbose --print-certs Frost-Fed-Bunker-0.4.1-frostr.apk
+zipalign -c -P 16 -v 4 Frost-Fed-Bunker-0.4.1-frostr.apk
+aapt dump badging Frost-Fed-Bunker-0.4.1-frostr.apk | head -5
+sha256sum Frost-Fed-Bunker-0.4.1-frostr.apk > Frost-Fed-Bunker-0.4.1-frostr.apk.sha256
 ~~~
 
 The expected package ID is org.glowstr.frostfedbunker, and app label is Frost Fed Bunker. The ARM64 split APK must target aarch64/arm64-v8a; it will not install on x86-only Android devices. Confirm the reported signer SHA-256 matches the public key fingerprint from keytool.
@@ -70,7 +70,7 @@ Return only the signed APK and checksum to an online publishing qube. The privat
 
 **On a sacrificial test device first**, confirm import of encrypted shares, signer unlock/biometrics, NIP-46 approvals/rejections, cancellation/back navigation, notification actions, bunker relay reconnection, share QR export/import, and FROST refresh with a **test identity**, not real signing shares.
 
-Use adb install -r Frost-Fed-Bunker-0.4.0-frostr.apk only when you expect the package ID and signing identity to match. An incompatible existing test APK must be uninstalled AFTER tested recovery; new key cannot automatically replace old key.
+Use adb install -r Frost-Fed-Bunker-0.4.1-frostr.apk only when you expect the package ID and signing identity to match. An incompatible existing test APK must be uninstalled AFTER tested recovery; new key cannot automatically replace old key.
 
 Every future update must have a higher versionCode than the installed one, retain org.glowstr.frostfedbunker, and use the same offline Frost signing key. Keep two geographically separated encrypted backups and recovery procedure. Never attach a signer private key or keystore to GitHub.
 

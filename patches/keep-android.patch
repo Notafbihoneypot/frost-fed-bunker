@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index b84c0f5..8a9f1b3 100644
+index b84c0f5..adfdc94 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -62,11 +62,11 @@ android {
@@ -12,8 +12,8 @@ index b84c0f5..8a9f1b3 100644
          targetSdk = 36
 -        versionCode = 32
 -        versionName = "1.4.0"
-+        versionCode = 11
-+        versionName = "0.4.0-frostr"
++        versionCode = 12
++        versionName = "0.4.1-frostr"
  
          testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
          // Reset the persisted kill switch to its disengaged baseline before every
@@ -1486,7 +1486,7 @@ index 5c323a3..b393f18 100644
                          OutlinedButton(
                              onClick = onRecoverNsec,
 diff --git a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-index 8b48a99..cae0456 100644
+index 8b48a99..debfcd0 100644
 --- a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
 +++ b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
 @@ -114,6 +114,7 @@ fun BunkerScreen(
@@ -1539,22 +1539,44 @@ index 8b48a99..cae0456 100644
              }
          }
      }
-@@ -184,6 +207,14 @@ fun BunkerScreen(
+@@ -184,6 +207,36 @@ fun BunkerScreen(
          horizontalAlignment = Alignment.CenterHorizontally
      ) {
          StatusBadge(bunkerStatus)
-+        if (bunkerStatus == BunkerStatus.ERROR) {
-+            Text(
-+                "Bunker connection failed. Check the NIP-46 relay list and network, " +
-+                    "then turn the bunker off and on to retry.",
-+                color = MaterialTheme.colorScheme.error,
-+                style = MaterialTheme.typography.bodySmall
-+            )
++        // The service stops itself after a failed start, which resets the status to
++        // STOPPED, so the reason is kept separately and shown until the next start.
++        val startError by BunkerService.lastError.collectAsState()
++        val shownError = startError?.takeIf { bunkerStatus != BunkerStatus.RUNNING }
++        if (shownError != null || bunkerStatus == BunkerStatus.ERROR) {
++            Card(
++                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
++                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
++            ) {
++                Column(modifier = Modifier.padding(12.dp)) {
++                    Text(
++                        stringResource(R.string.bunker_error_card_title),
++                        color = MaterialTheme.colorScheme.onErrorContainer,
++                        style = MaterialTheme.typography.titleSmall
++                    )
++                    Text(
++                        shownError ?: stringResource(R.string.bunker_error_generic),
++                        color = MaterialTheme.colorScheme.onErrorContainer,
++                        style = MaterialTheme.typography.bodySmall,
++                        modifier = Modifier.padding(top = 4.dp)
++                    )
++                    Text(
++                        stringResource(R.string.bunker_error_card_hint),
++                        color = MaterialTheme.colorScheme.onErrorContainer,
++                        style = MaterialTheme.typography.bodySmall,
++                        modifier = Modifier.padding(top = 6.dp)
++                    )
++                }
++            }
 +        }
  
          Spacer(modifier = Modifier.height(16.dp))
  
-@@ -224,8 +255,9 @@ fun BunkerScreen(
+@@ -224,8 +277,9 @@ fun BunkerScreen(
  
          BunkerToggleCard(
              enabled = isEnabled,
@@ -1565,7 +1587,7 @@ index 8b48a99..cae0456 100644
                  if (enabled && relays.isEmpty()) {
                      Toast.makeText(context, toastAddRelayFirst, Toast.LENGTH_SHORT).show()
                      return@BunkerToggleCard
-@@ -254,7 +286,6 @@ fun BunkerScreen(
+@@ -254,7 +308,6 @@ fun BunkerScreen(
              onAddClick = { showAddDialog = true },
              onRemove = { relay ->
                  val updated = relays - relay
@@ -1573,7 +1595,7 @@ index 8b48a99..cae0456 100644
                  saveBunkerRelays(updated)
              }
          )
-@@ -273,7 +304,6 @@ fun BunkerScreen(
+@@ -273,7 +326,6 @@ fun BunkerScreen(
          AddBunkerRelayDialog(
              relays = relays,
              onRelaysUpdated = { updated ->
@@ -1581,7 +1603,7 @@ index 8b48a99..cae0456 100644
                  saveBunkerRelays(updated)
              },
              onDismiss = { showAddDialog = false }
-@@ -339,6 +369,7 @@ fun BunkerScreen(
+@@ -339,6 +391,7 @@ fun BunkerScreen(
                              BunkerService.rotateBunkerCredentials(keepMobile)
                          }
                      }.onSuccess {
@@ -1590,10 +1612,49 @@ index 8b48a99..cae0456 100644
                      }.onFailure {
                          if (it is CancellationException) throw it
 diff --git a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-index f4101b5..28760d8 100644
+index f4101b5..bd5713e 100644
 --- a/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
 +++ b/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-@@ -358,10 +358,29 @@ class BunkerService : Service() {
+@@ -158,6 +158,38 @@ class BunkerService : Service() {
+         private val _status = MutableStateFlow(BunkerStatus.STOPPED)
+         val status: StateFlow<BunkerStatus> = _status.asStateFlow()
+ 
++        private val _lastError = MutableStateFlow<String?>(null)
++        /**
++         * Why the bunker last failed to start, worded for the user, or null. Kept after
++         * the service stops so the Bunker screen can still say why; cleared by the next
++         * start attempt.
++         */
++        val lastError: StateFlow<String?> = _lastError.asStateFlow()
++
++        private const val START_FAILURE_NOTIFICATION_ID = 3
++        private const val MAX_ERROR_CHARS = 600
++
++        /** The text to show for an exception thrown while starting the bunker. */
++        internal fun startFailureText(context: Context, e: Throwable): String {
++            val detail = when (e) {
++                is io.privkey.keep.uniffi.KeepMobileException.NetworkException ->
++                    e.msg.removePrefix("Transport error: ")
++                is io.privkey.keep.uniffi.KeepMobileException.InvalidRelayUrl -> e.msg
++                is io.privkey.keep.uniffi.KeepMobileException.Timeout ->
++                    context.getString(R.string.bunker_error_detail_timeout)
++                is io.privkey.keep.uniffi.KeepMobileException.CertificatePinMismatch ->
++                    context.getString(R.string.bunker_error_detail_pin_mismatch, e.hostname)
++                else -> e::class.simpleName ?: "unknown error"
++            }
++            return context.getString(R.string.bunker_error_start_failed, detail).take(MAX_ERROR_CHARS)
++        }
++
++        /** Relay hosts for an error message, never the full URL's path or query. */
++        internal fun relayHosts(relays: List<String>): String =
++            relays.take(5).joinToString(", ") { url ->
++                runCatching { java.net.URI(url).host }.getOrNull() ?: url.take(60)
++            }
++
+         private val pendingApprovals = ConcurrentHashMap<String, PendingApproval>()
+         private val globalPendingCount = AtomicInteger(0)
+         private val clientPendingCounts = ConcurrentHashMap<String, AtomicInteger>()
+@@ -358,10 +390,29 @@ class BunkerService : Service() {
           * Rotate the bunker credentials whether or not the service is running.
           */
          internal suspend fun rotateBunkerCredentials(keepMobile: io.privkey.keep.uniffi.KeepMobile) {
@@ -1627,7 +1688,7 @@ index f4101b5..28760d8 100644
          }
  
          /**
-@@ -390,6 +409,10 @@ class BunkerService : Service() {
+@@ -390,6 +441,10 @@ class BunkerService : Service() {
              current()?.restartIfServing()
          }
  
@@ -1638,7 +1699,16 @@ index f4101b5..28760d8 100644
          /** Starts an enabled bunker that is not running once the core has a node to serve. */
          internal fun startAfterNodeBuilt(context: Context, keepMobile: io.privkey.keep.uniffi.KeepMobile) {
              // A live service's own start, and its retries, own the bunker.
-@@ -542,7 +565,14 @@ class BunkerService : Service() {
+@@ -524,7 +579,7 @@ class BunkerService : Service() {
+         val keepMobile = app?.getKeepMobile()
+         if (keepMobile == null) {
+             if (BuildConfig.DEBUG) Log.e(TAG, "KeepMobile not available")
+-            _status.value = BunkerStatus.ERROR
++            reportStartFailure(getString(R.string.bunker_error_core_unavailable))
+             serving = false
+             stopSelf()
+             return START_NOT_STICKY
+@@ -542,7 +597,14 @@ class BunkerService : Service() {
          authorizedClientsCache.clear()
          bunkerConfig.authorizedClients.forEach { authorizedClientsCache.add(it.lowercase()) }
  
@@ -1647,14 +1717,32 @@ index f4101b5..28760d8 100644
 +            startForeground(NOTIFICATION_ID, createNotification(isActive = false))
 +        } catch (e: Exception) {
 +            if (BuildConfig.DEBUG) Log.e(TAG, "Unable to enter foreground mode", e)
-+            _status.value = BunkerStatus.ERROR
++            reportStartFailure(getString(R.string.bunker_error_foreground))
 +            stopSelf()
 +            return START_NOT_STICKY
 +        }
  
          // Stored keys that will not decrypt fail the open rather than being minted over,
          // and this runs on the main thread after startForeground, so an uncaught failure
-@@ -585,7 +615,17 @@ class BunkerService : Service() {
+@@ -550,7 +612,7 @@ class BunkerService : Service() {
+         val db = runCatching { Nip55Database.getInstance(this) }.getOrNull()
+         if (db == null) {
+             if (BuildConfig.DEBUG) Log.e(TAG, "Permission database not available")
+-            _status.value = BunkerStatus.ERROR
++            reportStartFailure(getString(R.string.bunker_error_database))
+             serving = false
+             stopSelf()
+             return START_NOT_STICKY
+@@ -562,7 +624,7 @@ class BunkerService : Service() {
+         val relays = runCatching { keepMobile.getRelayConfig(null).bunkerRelays }.getOrDefault(emptyList())
+         if (relays.isEmpty()) {
+             if (BuildConfig.DEBUG) Log.e(TAG, "No bunker relays configured")
+-            _status.value = BunkerStatus.ERROR
++            reportStartFailure(getString(R.string.bunker_error_no_relays))
+             serving = false
+             stopSelf()
+             return START_NOT_STICKY
+@@ -585,7 +647,17 @@ class BunkerService : Service() {
                          false
                      }
                  }
@@ -1667,13 +1755,74 @@ index f4101b5..28760d8 100644
 +                        startBunker(keepMobile, latestRelays)
 +                    } else {
 +                        _bunkerUrl.value = null
-+                        _status.value = BunkerStatus.ERROR
++                        reportStartFailure(getString(R.string.bunker_error_no_relays))
 +                    }
 +                }
              }
          }
          networkManager?.register()
-@@ -978,13 +1018,17 @@ class BunkerService : Service() {
+@@ -662,12 +734,13 @@ class BunkerService : Service() {
+ 
+     private suspend fun startBunkerLocked(keepMobile: io.privkey.keep.uniffi.KeepMobile, relays: List<String>, attempt: Int): Boolean {
+         if (!serving) return false
++        if (attempt == 0) clearStartFailure()
+         try {
+             // A config that cannot be read may hold an enabled proxy, so it is not taken
+             // as "no proxy": a direct start would leak the user's IP to the relays.
+             val proxy = runCatching { keepMobile.getProxyConfig() }.getOrElse {
+                 if (BuildConfig.DEBUG) Log.e(TAG, "proxy config unreadable; refusing to connect without proxy")
+-                _status.value = BunkerStatus.ERROR
++                reportStartFailure(getString(R.string.bunker_error_proxy_unreadable))
+                 stopSelf()
+                 return false
+             }
+@@ -684,7 +757,12 @@ class BunkerService : Service() {
+                 if (BuildConfig.DEBUG) {
+                     Log.e(TAG, if (proxy.enabled) "No relay may be reached through the proxy" else "All relays failed connection-time DNS validation")
+                 }
+-                _status.value = BunkerStatus.ERROR
++                reportStartFailure(
++                    getString(
++                        if (proxy.enabled) R.string.bunker_error_no_relay_via_proxy else R.string.bunker_error_dns,
++                        relayHosts(relays)
++                    )
++                )
+                 stopSelf()
+                 return false
+             }
+@@ -771,13 +849,21 @@ class BunkerService : Service() {
+                 runCatching { handler.stopBunker() }
+                 if (attempt < MAX_START_RETRIES) return true
+                 if (BuildConfig.DEBUG) Log.e(TAG, "Bunker start did not settle: $started")
+-                _status.value = BunkerStatus.ERROR
++                reportStartFailure(
++                    getString(
++                        R.string.bunker_error_no_answer,
++                        (START_SETTLE_TIMEOUT_MS / 1000).toInt(),
++                        MAX_START_RETRIES + 1,
++                        relayHosts(safeRelays)
++                    )
++                )
+                 stopSelf()
+                 return false
+             }
+             val url = handler.getBunkerUrl()
+             _bunkerUrl.value = url
+             _status.value = started
++            clearStartFailure()
+ 
+             updateNotification(isActive = true)
+ 
+@@ -792,7 +878,7 @@ class BunkerService : Service() {
+                 return false
+             }
+             if (BuildConfig.DEBUG) Log.e(TAG, "Failed to start bunker: ${e::class.simpleName}")
+-            _status.value = BunkerStatus.ERROR
++            reportStartFailure(startFailureText(this, e))
+             stopSelf()
+             return false
+         }
+@@ -978,13 +1064,17 @@ class BunkerService : Service() {
              request.eventContent?.let { putExtra(Nip46ApprovalActivity.EXTRA_EVENT_CONTENT, it) }
              flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
          }
@@ -1693,7 +1842,7 @@ index f4101b5..28760d8 100644
          val notificationId = approvalNotificationId(requestId)
          val contentIntent = PendingIntent.getActivity(
              this,
-@@ -992,6 +1036,17 @@ class BunkerService : Service() {
+@@ -992,6 +1082,17 @@ class BunkerService : Service() {
              intent,
              PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
          )
@@ -1711,7 +1860,7 @@ index f4101b5..28760d8 100644
          val appLabel = sanitizeDisplayName(request.appName).ifBlank { truncatePubkey(request.appPubkey) }
          val body = getString(R.string.bunker_approval_notification_text, appLabel, sanitizeDisplayName(request.method))
          val publicVersion = NotificationCompat.Builder(this, APPROVAL_CHANNEL_ID)
-@@ -1008,7 +1063,16 @@ class BunkerService : Service() {
+@@ -1008,7 +1109,16 @@ class BunkerService : Service() {
              .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
              .setPublicVersion(publicVersion)
              .setContentIntent(contentIntent)
@@ -1729,7 +1878,45 @@ index f4101b5..28760d8 100644
              .setAutoCancel(true)
              .setTimeoutAfter(APPROVAL_TIMEOUT_MS)
              .build()
-@@ -1110,7 +1174,11 @@ class BunkerService : Service() {
+@@ -1064,6 +1174,37 @@ class BunkerService : Service() {
+ 
+     override fun onBind(intent: Intent?): IBinder? = null
+ 
++    /** Puts the bunker in ERROR with a reason the user can act on, and says so in a notification. */
++    private fun reportStartFailure(reason: String) {
++        val text = reason.take(MAX_ERROR_CHARS)
++        _lastError.value = text
++        _status.value = BunkerStatus.ERROR
++        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
++            != PackageManager.PERMISSION_GRANTED) return
++        val open = PendingIntent.getActivity(
++            this,
++            START_FAILURE_NOTIFICATION_ID,
++            Intent(this, MainActivity::class.java).apply {
++                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
++            },
++            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
++        )
++        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
++            .setSmallIcon(R.drawable.ic_launcher_foreground)
++            .setContentTitle(getString(R.string.bunker_error_notification_title))
++            .setContentText(text)
++            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
++            .setContentIntent(open)
++            .setAutoCancel(true)
++            .build()
++        runCatching { NotificationManagerCompat.from(this).notify(START_FAILURE_NOTIFICATION_ID, notification) }
++    }
++
++    private fun clearStartFailure() {
++        _lastError.value = null
++        runCatching { NotificationManagerCompat.from(this).cancel(START_FAILURE_NOTIFICATION_ID) }
++    }
++
+     private fun createNotificationChannel() {
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+             val channel = NotificationChannel(
+@@ -1110,7 +1251,11 @@ class BunkerService : Service() {
  
      private fun updateNotification(isActive: Boolean) {
          val manager = getSystemService(NotificationManager::class.java)
@@ -1807,7 +1994,7 @@ index 54557ff..e19c91c 100644
      }
  
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 5ae34ba..6845b3c 100644
+index 5ae34ba..633ad73 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -1,6 +1,6 @@
@@ -1827,7 +2014,7 @@ index 5ae34ba..6845b3c 100644
      <string name="foreground_service_text">Relay connections active</string>
  
      <string name="notification_channel_signing_requests">Signing Requests</string>
-@@ -72,7 +72,7 @@
+@@ -72,9 +72,24 @@
  
      <string name="bunker_service_channel_name">NIP-46 Bunker</string>
      <string name="bunker_service_channel_description">Persistent notification for NIP-46 bunker mode</string>
@@ -1835,8 +2022,25 @@ index 5ae34ba..6845b3c 100644
 +    <string name="bunker_service_title" translatable="false">Frost Fed Bunker Signer</string>
      <string name="bunker_service_text_starting">Starting bunker...</string>
      <string name="bunker_service_text_active">Bunker active - accepting remote signing requests</string>
++    <string name="bunker_error_card_title">Bunker is not running</string>
++    <string name="bunker_error_card_hint">Fix the relay list or network, then turn the bunker off and on. Apps paired with this bunker cannot sign in until it runs.</string>
++    <string name="bunker_error_generic">Bunker connection failed. Check the NIP-46 relay list and network.</string>
++    <string name="bunker_error_notification_title">Bunker could not start</string>
++    <string name="bunker_error_no_relays">No bunker relays are set. Add a wss:// relay to the Bunker Relays list.</string>
++    <string name="bunker_error_dns">None of the bunker relays could be found by name: <xliff:g id="relays" example="relay.example.com">%1$s</xliff:g>. Check the addresses and your network or Private DNS.</string>
++    <string name="bunker_error_no_relay_via_proxy">None of the bunker relays can be used through the proxy: <xliff:g id="relays" example="relay.example.com">%1$s</xliff:g>.</string>
++    <string name="bunker_error_no_answer">No bunker relay accepted the connection within <xliff:g id="seconds" example="5">%1$d</xliff:g> seconds after <xliff:g id="attempts" example="6">%2$d</xliff:g> attempts: <xliff:g id="relays" example="relay.example.com">%3$s</xliff:g>. The relay may be down or refusing connections; try a different relay.</string>
++    <string name="bunker_error_start_failed">Could not start the bunker. <xliff:g id="detail" example="No relay could be reached. wss://relay.example.com/: Timeout">%1$s</xliff:g></string>
++    <string name="bunker_error_detail_timeout">The connection to the relays timed out.</string>
++    <string name="bunker_error_detail_pin_mismatch">The TLS certificate of <xliff:g id="host" example="relay.example.com">%1$s</xliff:g> changed since it was first seen, so the bunker refused to connect. This can mean the connection is being intercepted.</string>
++    <string name="bunker_error_core_unavailable">The signer core is not ready. Open Frost Fed Bunker and try again.</string>
++    <string name="bunker_error_foreground">Android did not let the bunker run in the background. Allow notifications for Frost Fed Bunker and try again.</string>
++    <string name="bunker_error_database">The bunker\'s permission database could not be opened.</string>
++    <string name="bunker_error_proxy_unreadable">The proxy setting could not be read, so the bunker did not connect rather than bypass your proxy.</string>
      <string name="bunker_approval_channel_name">Bunker approval requests</string>
-@@ -87,7 +87,7 @@
+     <string name="bunker_approval_channel_description">Alerts when a connected app is waiting for signing approval</string>
+     <string name="bunker_approval_notification_title">Signing approval needed</string>
+@@ -87,7 +102,7 @@
      <string name="common_copy">Copy</string>
  
      <!-- Biometric unlock -->

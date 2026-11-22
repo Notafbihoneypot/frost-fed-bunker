@@ -1,14 +1,21 @@
 name: Build Frost Fed Bunker Android
 
+# Builds the UNSIGNED 0.4.x release APK with build-unsigned.sh: pinned upstream
+# Keep Android + Keep Rust core, plus patches/*.patch. The owner signs it
+# offline (OFFLINE-APK-SIGNING.md); no signing key ever reaches CI.
+
 on:
   workflow_dispatch:
   pull_request:
-    branches: [main-frostr]
-  push:
-    branches: [main-frostr]
     paths:
-      - 'apply-overlay.py'
-      - 'THIRD_PARTY_NOTICES.md'
+      - 'patches/**'
+      - 'build-unsigned.sh'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [frostr-0.4.0, 'claude/**']
+    paths:
+      - 'patches/**'
+      - 'build-unsigned.sh'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -19,105 +26,23 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KEEP_ANDROID_SHA: 50c70f2cbe67eac7e289e4950625f34f2c038fc1
-  KEEP_CORE_SHA: 2ebfed2086688ab880ff0f58bb8f7c7dd3acaf9e
   ANDROID_HOME: /usr/local/lib/android/sdk
   NDK_VERSION: "29.0.14206865"
+  BUILD_TOOLS: "37.0.0"
+  PLATFORM: "android-37.0"
   CARGO_NDK_VERSION: "4.1.2"
   RUST_VERSION: "1.89.0"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
 
     steps:
-      - name: Check out project overlay
+      - name: Check out patches and build script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Check out pinned Keep Android and Rust core
-        run: |
-          set -euo pipefail
-          git clone --filter=blob:none https://github.com/privkeyio/keep-android.git upstream-keep-android
-          git -C upstream-keep-android checkout --detach "$KEEP_ANDROID_SHA"
-          git clone --filter=blob:none https://github.com/privkeyio/keep.git upstream-keep-android/keep
-          git -C upstream-keep-android/keep checkout --detach "$KEEP_CORE_SHA"
-          test "$(cat upstream-keep-android/keep.version)" = "$KEEP_CORE_SHA"
-          test "$(git -C upstream-keep-android rev-parse HEAD)" = "$KEEP_ANDROID_SHA"
-          test "$(git -C upstream-keep-android/keep rev-parse HEAD)" = "$KEEP_CORE_SHA"
-
-      - name: Apply Frost Fed Bunker Android overlay
-        run: python3 apply-overlay.py upstream-keep-android
-
-      - name: Pin local Rust overlay commit
-        run: |
-          set -euo pipefail
-          if ! git -C upstream-keep-android/keep diff --quiet -- keep-mobile/src/lib.rs; then
-            git -C upstream-keep-android/keep config user.name "Frost Fed Bunker CI"
-            git -C upstream-keep-android/keep config user.email "actions@users.noreply.github.com"
-            git -C upstream-keep-android/keep add keep-mobile/src/lib.rs
-            git -C upstream-keep-android/keep commit -m "frost-fed-bunker: mobile share refresh overlay"
-            PATCHED_KEEP_SHA="$(git -C upstream-keep-android/keep rev-parse HEAD)"
-            printf '%s\n' "$PATCHED_KEEP_SHA" > upstream-keep-android/keep.version
-          fi
-          test -z "$(git -C upstream-keep-android/keep status --porcelain)"
-          test "$(cat upstream-keep-android/keep.version)" = "$(git -C upstream-keep-android/keep rev-parse HEAD)"
-
-      - name: Verify FROSTR feature overlay
-        run: |
-          set -euo pipefail
-          grep -q 'applicationId = "org.glowstr.frostfedbunker"' upstream-keep-android/app/build.gradle.kts
-          grep -q 'versionName = "0.3.1-frostr"' upstream-keep-android/app/build.gradle.kts
-          grep -q 'Manifest.permission.POST_NOTIFICATIONS' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
-          grep -q 'Nip46ApprovalActionReceiver' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'getRelayConfig(null).bunkerRelays' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          ! grep -q 'setFullScreenIntent(contentIntent, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          ! grep -q 'android.permission.USE_FULL_SCREEN_INTENT' upstream-keep-android/app/src/main/AndroidManifest.xml
-          grep -q 'Rotate NIP-46 connection keys' upstream-keep-android/app/src/main/res/values/strings_connections.xml
-          grep -q 'Export encrypted FROST share backup' upstream-keep-android/app/src/main/res/values/strings_main.xml
-          grep -q 'Rotate / refresh existing FROST shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'frost_refresh_exports' upstream-keep-android/keep/keep-mobile/src/lib.rs
-          grep -q 'Save this rotated share' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'Save this encrypted share' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'Frost-Fed-Bunker-generated-share-' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'saveGeneratedShare.launch' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'Encrypted FROST share saved' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          test "$(grep -c 'ActivityResultContracts.CreateDocument("text/plain")' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt)" -eq 2
-          grep -q 'one passphrase per line' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'refresh_shares requires the full set' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
-          grep -q 'checked_draw' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
-          grep -q 'refreshed share does not match its published verifying share' upstream-keep-android/keep/keep-core/src/frost/refresh.rs
-          grep -q 'ShareExport::parse(&bech32_data)' upstream-keep-android/keep/keep-mobile/src/lib.rs
-          grep -q 'complete_verifying_shares' upstream-keep-android/keep/keep-mobile/src/lib.rs
-          grep -q 'let mut verifying_shares = std::collections::BTreeMap::new()' upstream-keep-android/keep/keep-mobile/src/lib.rs
-          grep -q 'BunkerService.rotateBunkerCredentials(keepMobile)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          grep -q 'BunkerConfigInfo(config.enabled, emptyList())' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'authorizedClients = emptySet()' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          grep -q 'awaitStartSettled(handler)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'MAX_START_RETRIES' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          grep -q 'restartAfterRelayConfigChange' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'val latestRelays = runCatching' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'startBunker(keepMobile, latestRelays)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
-          grep -q 'BunkerConfigInfo(false, current.authorizedClients)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          ! grep -q 'rotateBunkerUrlInService' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
-          grep -q 'last_crash.txt' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
-          ! grep -q 'throwable.message' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
-          ! grep -q 'stackTraceToString' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/KeepMobileApp.kt
-          grep -q 'import androidx.activity.compose.BackHandler' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
-          grep -q 'BackHandler(enabled = hasTransientScreen)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
-          grep -q 'showShareRotationScreen' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
-          grep -q 'Rotate FROST Shares' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/MainActivity.kt
-          grep -q 'fun FrostShareRotationScreen' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'setSecureScreen(context, true)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/CreateGroupScreen.kt
-          grep -q 'CreateDocument("text/plain")' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
-          grep -q 'Save encrypted share to file' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
-          grep -q 'documentPickerActive' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
-          grep -q 'rememberUpdatedState(documentPickerActive)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ExportShareScreen.kt
-          grep -q 'Paste nsec' upstream-keep-android/app/src/main/res/values/strings_backup.xml
-          grep -q 'clearPrimaryClip()' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
-          grep -q 'isValidNsecFormat(pasted)' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/ImportNsecScreen.kt
-          grep -q 'savingRelays = true' upstream-keep-android/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+        with:
+          persist-credentials: false
 
       - name: Set up JDK 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
@@ -130,8 +55,8 @@ jobs:
         with:
           packages: platform-tools
 
-      - name: Install Android NDK
-        run: sdkmanager --install "ndk;$NDK_VERSION"
+      - name: Install Android platform, build tools and NDK
+        run: sdkmanager --install "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" "ndk;$NDK_VERSION"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
@@ -144,41 +69,40 @@ jobs:
         with:
           tool: cargo-ndk@${{ env.CARGO_NDK_VERSION }}
 
+      - name: Install ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
 
-      - name: Build ARM64 Android APK
-        working-directory: upstream-keep-android
+      - name: Build and verify unsigned ARM64 release APK
         env:
-          KEEP_REPO: ${{ github.workspace }}/upstream-keep-android/keep
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
-          TARGETS: aarch64-linux-android
           AWS_LC_SYS_CMAKE_BUILDER: "1"
+        run: ./build-unsigned.sh
+
+      - name: Check bunker start-failure reporting
         run: |
           set -euo pipefail
-          ./gradlew assembleDebug --no-daemon
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          mapfile -t APKS < <(find app/build/outputs/apk/debug -type f -name '*.apk' | sort)
-          printf 'Built APKs:\n%s\n' "${APKS[*]}"
-          test "${#APKS[@]}" -eq 1
-          cp "${APKS[0]}" "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk" || \
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk"
-          sha256sum "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk" > "$GITHUB_WORKSPACE/dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk.sha256"
+          S=build/app/src/main/kotlin/io/privkey/keep/nip46/BunkerService.kt
+          grep -q 'val lastError: StateFlow<String?>' "$S"
+          grep -q 'reportStartFailure(startFailureText(this, e))' "$S"
+          # Every ERROR goes through reportStartFailure, which sets it once.
+          test "$(grep -c '_status.value = BunkerStatus.ERROR' "$S")" -eq 1
+          grep -q 'BunkerService.lastError.collectAsState()' build/app/src/main/kotlin/io/privkey/keep/nip46/BunkerScreen.kt
+          grep -q 'fn no_usable_relay_message' build/keep/keep-mobile/src/lib.rs
 
-      - name: Upload CI artifact
+      - name: Run core tests for the patched Rust code
+        working-directory: build/keep
+        run: |
+          cargo test -p keep-mobile --lib no_usable_relay_message
+          cargo test -p keep-mobile --lib refresh_keeps_group_key_replaces_every_share_and_refuses_bad_sets
+
+      - name: Upload unsigned APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: Frost-Fed-Bunker-Android-ARM64
-          path: |
-            dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk
-            dist/Frost-Fed-Bunker-0.3.1-frostr-arm64.apk.sha256
+          name: Frost-Fed-Bunker-unsigned-release-arm64
+          path: dist/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-
-      # Safety: each fresh GitHub runner generates its own debug signing key.
-      # Publishing that key as an app update causes Android signature mismatch;
-      # uninstalling the old build would erase stored FROST shares. Until stable
-      # owner-controlled signing is configured, publish only the CI artifact for
-      # installation in a disposable test profile/device, never as an upgrade.

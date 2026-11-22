@@ -4,16 +4,16 @@ Android FROST threshold signer and NIP-46/NIP-55 signer for Glowstr/Nostr, built
 
 The project intentionally reuses the upstream Rust FROST implementation instead of reimplementing threshold cryptography in Kotlin.
 
-## Current 0.4.0 base
+## Current 0.4.x base
 
 - Keep Android: `09ca787c06257cc99e5574b14192a79e6117e088` (main, 2026-11-13, after v1.4.0)
 - Keep Rust core: `e895a38c8f02ba711129bc224f70fbde27721723` (main, 2026-11-14, after v0.14.0)
-- Android package: `org.glowstr.frostfedbunker`, version `0.4.0-frostr` (versionCode 11; ARM64 split 112)
+- Android package: `org.glowstr.frostfedbunker`, version `0.4.1-frostr` (versionCode 12; ARM64 split 122)
 - Toolchain: Rust 1.89.0 (upstream `rust-toolchain.toml`), NDK 29.0.14206865, JDK 21, compileSdk 37, Gradle 9.9.0, AGP 9.5.1
 
 The Rust core is newer than the `keep.version` upstream Android pins (`794a2b2`). The two extra core commits only tighten NIP-55 relay-host parsing and recheck bunker FROST co-signatures; the UniFFI interface is unchanged.
 
-Our changes live in `patches/keep-android.patch` (Kotlin UI/Android) and `patches/keep.patch` (Rust: `frost_refresh_exports` share rotation, its test, and a `Cargo.lock` bump of the yanked `async-utility` 0.3.1 to 0.3.2).
+Our changes live in `patches/keep-android.patch` (Kotlin UI/Android) and `patches/keep.patch` (Rust: `frost_refresh_exports` share rotation and its test, a relay-failure message that names each unreachable relay and why, and a `Cargo.lock` bump of the yanked `async-utility` 0.3.1 to 0.3.2).
 
 ## What works
 
@@ -30,6 +30,7 @@ Our changes live in `patches/keep-android.patch` (Kotlin UI/Android) and `patche
 - NIP-55 Android signer support
 - NIP-44 encryption/decryption
 - Approval notifications without forced full-screen/activity launch
+- A bunker that cannot start says why, on the Bunker screen and in a notification (for example `wss://relay.example/: Timeout: TCP connect`), instead of silently stopping
 - Signing permissions, history, audit data, and kill switch
 - NIP-46 client revoke and bunker credential rotation
 - Offline full-set FROST share refresh/rotation
@@ -108,9 +109,9 @@ The current upstream transport is relay/network based. A fully disconnected FROS
 2. applies `patches/`, commits the patched core with a fixed date so `keep.version` and `SOURCE_DATE_EPOCH` are reproducible;
 3. builds the Rust core for ARM64 with cargo-ndk and the `assembleRelease` APK;
 4. refuses the output unless it is unsigned (no v1 entries, no APK Signing Block, `apksigner verify` fails), non-debuggable, has the expected package/version, and contains `lib/arm64-v8a/libkeep_mobile.so`;
-5. writes `dist/Frost-Fed-Bunker-0.4.0-frostr-arm64-unsigned.apk` and its `.sha256`.
+5. writes `dist/Frost-Fed-Bunker-0.4.1-frostr-arm64-unsigned.apk` and its `.sha256`.
 
-CI also runs the Rust share-rotation test and uploads `dist/` as the `Frost-Fed-Bunker-unsigned-release-arm64` artifact.
+CI (`.github/workflows/android.yml`) runs the script on pushes to `frostr-0.4.0` and `claude/**` branches and on pull requests that touch the patches, then runs the patched Rust tests (share rotation and relay-failure message) and uploads `dist/` as the `Frost-Fed-Bunker-unsigned-release-arm64` artifact.
 
 To change upstream pins: bump the SHAs in `build-unsigned.sh`, rebuild the patches against the new commits (`git apply --3way`, fix conflicts, `git diff`), and rerun the script.
 

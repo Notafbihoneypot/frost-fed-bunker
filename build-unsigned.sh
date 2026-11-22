@@ -9,7 +9,7 @@ set -euo pipefail
 KEEP_ANDROID_SHA=09ca787c06257cc99e5574b14192a79e6117e088 # keep-android main 2026-11-13
 KEEP_CORE_SHA=e895a38c8f02ba711129bc224f70fbde27721723    # keep main 2026-11-14
 APP_ID=org.glowstr.frostfedbunker
-VERSION=0.4.0-frostr
+VERSION=0.4.1-frostr
 BUILD_TOOLS=37.0.0
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
