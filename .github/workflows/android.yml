@@ -6,6 +6,11 @@ name: Build Frost Fed Bunker Android
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_signed_release:
+        description: 'Also sign with a one-time CI key and publish a GitHub release'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'patches/**'
@@ -79,7 +84,21 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
           AWS_LC_SYS_CMAKE_BUILDER: "1"
-        run: ./build-unsigned.sh
+        run: |
+          set -uo pipefail
+          # Maven Central sometimes answers GitHub runners with HTTP 429. Retry
+          # only that kind of download failure; a real build error fails at once.
+          for attempt in 1 2 3; do
+            ./build-unsigned.sh 2>&1 | tee build.log
+            status=${PIPESTATUS[0]}
+            [ "$status" -eq 0 ] && exit 0
+            if ! grep -qE 'HTTP 429|could not resolve plugin artifact|Could not resolve all (files|dependencies|artifacts)|Could not GET' build.log; then
+              exit "$status"
+            fi
+            echo "Dependency download failed (attempt $attempt); retrying in $((attempt * 90))s"
+            sleep $((attempt * 90))
+          done
+          exit "$status"
 
       - name: Check bunker start-failure reporting
         run: |
@@ -99,10 +118,90 @@ jobs:
           cargo test -p keep-mobile --lib refresh_keeps_group_key_replaces_every_share_and_refuses_bad_sets
 
       - name: Upload unsigned APK
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: Frost-Fed-Bunker-unsigned-release-arm64
           path: dist/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  # Manual only. Signs with a key generated on the runner and discarded at the
+  # end of the job: the APK installs, but no later build can update it. The
+  # owner-signed path (OFFLINE-APK-SIGNING.md) remains the real release track.
+  publish-signed:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_signed_release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: 0.4.1-frostr
+    steps:
+      - name: Download unsigned APK
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: Frost-Fed-Bunker-unsigned-release-arm64
+          path: dist
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: platform-tools
+
+      - name: Install build tools
+        run: sdkmanager --install "build-tools;$BUILD_TOOLS"
+
+      - name: Sign with a one-time key
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS"
+          cd dist
+          sha256sum -c "Frost-Fed-Bunker-$VERSION-arm64-unsigned.apk.sha256"
+          PASS="$(openssl rand -base64 33 | tr -d '/+=\n')"
+          KS="$RUNNER_TEMP/one-time.p12"
+          keytool -genkeypair -storetype PKCS12 -keystore "$KS" -storepass "$PASS" \
+            -alias frostfedbunker -keyalg EC -groupname secp256r1 -validity 9125 \
+            -dname "CN=Frost Fed Bunker one-time CI key"
+          "$BT/zipalign" -P 16 -f 4 "Frost-Fed-Bunker-$VERSION-arm64-unsigned.apk" aligned.apk
+          printf '%s' "$PASS" | "$BT/apksigner" sign --ks "$KS" --ks-pass stdin \
+            --out "Frost-Fed-Bunker-$VERSION-arm64.apk" aligned.apk
+          rm -f "$KS" aligned.apk
+          unset PASS
+          "$BT/apksigner" verify --verbose --print-certs "Frost-Fed-Bunker-$VERSION-arm64.apk" | tee certs.txt
+          "$BT/aapt2" dump badging "Frost-Fed-Bunker-$VERSION-arm64.apk" | grep -q "^package: name='org.glowstr.frostfedbunker' .*versionName='$VERSION'"
+          sha256sum "Frost-Fed-Bunker-$VERSION-arm64.apk" > "Frost-Fed-Bunker-$VERSION-arm64.apk.sha256"
+          grep -m1 'SHA-256 digest' certs.txt | sed 's/.*: //' > cert-sha256.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd dist
+          CERT="$(cat cert-sha256.txt)"
+          APKSHA="$(cut -d' ' -f1 "Frost-Fed-Bunker-$VERSION-arm64.apk.sha256")"
+          cat > notes.md <<NOTES
+          Frost Fed Bunker $VERSION, ARM64 release build (package \`org.glowstr.frostfedbunker\`, versionCode 12).
+
+          **Signed with a one-time key that GitHub Actions generated for this build and deleted afterwards.** It installs and runs normally, but no later build can update it: updating means uninstalling, which deletes the FROST share stored in the app. Export and verify an encrypted share backup before any uninstall.
+
+          - APK SHA-256: \`$APKSHA\`
+          - Signing certificate SHA-256: \`$CERT\`
+
+          New in this build: a bunker that cannot start now shows why, on the Bunker screen and in a notification, naming each relay that failed and the reason.
+          NOTES
+          sed -i 's/^          //' notes.md
+          gh release create "v$VERSION" \
+            "Frost-Fed-Bunker-$VERSION-arm64.apk" \
+            "Frost-Fed-Bunker-$VERSION-arm64.apk.sha256" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Frost Fed Bunker $VERSION" --notes-file notes.md
+
